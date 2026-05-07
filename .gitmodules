@@ -1,0 +1,6 @@
+[submodule "DeepGEMM/third-party/cutlass"]
+	path = DeepGEMM/third-party/cutlass
+	url = https://github.com/NVIDIA/cutlass.git
+[submodule "DeepGEMM/third-party/fmt"]
+	path = DeepGEMM/third-party/fmt
+	url = https://github.com/fmtlib/fmt.git
