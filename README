@@ -50,12 +50,12 @@ Now you can run the following tests.
 2. Re-build `sgl-kernel`:
    ```bash
    cd /workspace/ECHO/sglang/sgl-kernel
-   make build
+   make build && uv pip install dist/*whl --force-reinstall --no-deps
    ```
 3. Re-build `DeepGEMM`:
    ```bash
    cd /workspace/ECHO/DeepGEMM
-   ./install.sh
+   ./install.sh && uv pip install dist/*whl --force-reinstall --no-deps
    ```
 
 ### Optional: tune the fused MoE kernel of SGLang
