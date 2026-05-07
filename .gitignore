@@ -1,0 +1,107 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+.hypothesis/
+.nox/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+cover/
+cython_debug/
+__pypackages__/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Packaging / build outputs
+build/
+dist/
+site/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+*.egg
+.installed.cfg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+compile_commands.json
+
+# Native build artifacts
+*.d
+*.o
+*.obj
+*.lo
+*.slo
+*.a
+*.la
+*.lai
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.gch
+*.pch
+*.mod
+*.smod
+
+# Rust
+Cargo.lock
+target/
+
+# IDE / editor / OS
+.idea/
+.vscode/
+*.iml
+*.swp
+.DS_Store
+
+# Logs and local scratch files
+*.log
+err.log
+tmp*.txt
+profile-*
+*exp-res/
+recall-rate/
+trace*.json
+*.trace.json.gz
+
+# Documentation build outputs
+docs/_build/
+sglang/docs/_build/
+
+# SGLang-specific generated data and local artifacts
+sglang/benchmark/mmlu/data
+sglang/benchmark/mmlu/data.tar
+sglang/benchmark/llava_bench/images
+sglang/benchmark/llava_bench/mme_pack
+sglang/.tokenizer_cache/
+sglang/work_dirs/
+sglang/lmms-eval
+sglang/1208-exp
+sglang/.env.leave
+
+# DeepGEMM-specific local build outputs
+DeepGEMM/deep_gemm_cpp*.so
