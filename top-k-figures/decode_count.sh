@@ -8,6 +8,6 @@ if [ ! -d "$RESULTS" ]; then
 fi
 
 echo "Plot pdf into $OUTPUT_PDF"
-uv run plot_full_request_pd.py $RESULTS decode_count -o $OUTPUT_PDF -f pdf
+python plot_full_request_pd.py $RESULTS decode_count -o $OUTPUT_PDF -f pdf
 echo "Plot png into $OUTPUT_PNG"
-uv run plot_full_request_pd.py $RESULTS decode_count -o $OUTPUT_PNG -f png
+python plot_full_request_pd.py $RESULTS decode_count -o $OUTPUT_PNG -f png

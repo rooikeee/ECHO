@@ -4,10 +4,16 @@ This repository regenerates the top-k figure artifacts from saved logits tensors
 
 ## Setup
 
-Install the Python environment with `uv`:
+Pull LFS data files:
 
 ```bash
-uv sync
+git lfs pull
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
 ```
 
 ## Run
@@ -53,3 +59,4 @@ echo/pdfs/prefill_bucket_size/*.pdf
 # also regenerates PNGs for quick viewing
 echo/figs/*/*.png
 ```
+
