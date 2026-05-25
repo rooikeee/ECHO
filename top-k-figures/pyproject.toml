@@ -1,0 +1,25 @@
+[project]
+name = "top-k"
+version = "0.1.0"
+description = "Top-K selection using TileLang kernels"
+dependencies = [
+    "matplotlib",
+    "pandas",
+    "tilelang @ git+https://github.com/tile-ai/tilelang.git@59865bdf69ecf5bf63e18e1c944c5eff5f95d777",
+    "torch==2.9.1",
+    "tqdm",
+    "seaborn>=0.13.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.8,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "top_k"
+module-root = "."
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

@@ -233,3 +233,7 @@ python test_fuse.py prefill_prefetch
   ```bash
   bash /workspace/ECHO/sglang/scripts/ensure_vram_clear.sh
   ```
+
+## Figure 7,8,9 — Top-K Figure Artifacts
+
+see `top-k-figures/README.md` for instructions to regenerate the artifacts in Figures 7–9.
