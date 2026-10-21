@@ -1,7 +1,0 @@
-exclude = [
-    "deep_gemm",
-    "tests",
-    "third-party",
-    "setup.py",
-]
-line-length = 120

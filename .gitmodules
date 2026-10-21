@@ -1,6 +1,9 @@
-[submodule "DeepGEMM/third-party/cutlass"]
-	path = DeepGEMM/third-party/cutlass
-	url = https://github.com/NVIDIA/cutlass.git
-[submodule "DeepGEMM/third-party/fmt"]
-	path = DeepGEMM/third-party/fmt
-	url = https://github.com/fmtlib/fmt.git
+[submodule "deepgemm-ascend/third-party/clangd-ascend"]
+	path = deepgemm-ascend/third-party/clangd-ascend
+	url = https://github.com/deepseek-ai/clangd-ascend.git
+[submodule "deepgemm-ascend/third-party/deep-jit"]
+	path = deepgemm-ascend/third-party/deep-jit
+	url = https://github.com/deepseek-ai/DeepJIT.git
+[submodule "deepgemm-ascend/third-party/magic_enum"]
+	path = deepgemm-ascend/third-party/magic_enum
+	url = https://github.com/Neargye/magic_enum.git

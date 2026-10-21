@@ -1,0 +1,7 @@
+torch==2.8.0
+torchvision==0.23.0
+torch-npu==2.8.0.post2
+triton-ascend==3.2.0
+numpy==1.26.4
+setuptools==80.9.0
+wheel==0.45.1

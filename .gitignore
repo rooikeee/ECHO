@@ -20,6 +20,9 @@ __pypackages__/
 # Virtual environments
 .env
 .venv
+.venv-npu/
+.venv-*/
+venv-*/
 env/
 venv/
 ENV/
@@ -90,18 +93,39 @@ trace*.json
 
 # Documentation build outputs
 docs/_build/
-sglang/docs/_build/
+sglang-ascend/docs/_build/
 
 # SGLang-specific generated data and local artifacts
-sglang/benchmark/mmlu/data
-sglang/benchmark/mmlu/data.tar
-sglang/benchmark/llava_bench/images
-sglang/benchmark/llava_bench/mme_pack
-sglang/.tokenizer_cache/
-sglang/work_dirs/
-sglang/lmms-eval
-sglang/1208-exp
-sglang/.env.leave
+sglang-ascend/benchmark/mmlu/data
+sglang-ascend/benchmark/mmlu/data.tar
+sglang-ascend/benchmark/llava_bench/images
+sglang-ascend/benchmark/llava_bench/mme_pack
+sglang-ascend/.tokenizer_cache/
+sglang-ascend/work_dirs/
+sglang-ascend/lmms-eval
+sglang-ascend/1208-exp
+sglang-ascend/.env.leave
 
 # DeepGEMM-specific local build outputs
-DeepGEMM/deep_gemm_cpp*.so
+deepgemm-ascend/deep_gemm_cpp*.so
+
+# Machine-local assets and experiment outputs (keep source/lock files tracked)
+/models/
+/datasets/
+/checkpoints/
+/results/
+/runs/
+/artifacts/
+/.cache/
+/.local/
+*.safetensors
+*.ckpt
+*.onnx
+*.whl
+*.run
+*.partial
+*.prof
+*.nsys-rep
+*.ncu-rep
+# Existing historical LFS pointers stay tracked; do not add new tensor dumps.
+/top-k-figures/data/

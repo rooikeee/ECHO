@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "imported_on": "2026-09-30",
+  "echo_cuda_baseline": "bc1b75c1000010d0ac6f032ebaac283255c050b1",
+  "sources": {
+    "sglang-ascend": {
+      "repository": "https://github.com/Ascend/ascend-sglang.git",
+      "ref": "main",
+      "commit": "f30df723bf146d4a8037010b0b11939a601df423",
+      "local_changes": [
+        "python/pyproject_cuda.toml preserves upstream python/pyproject.toml",
+        "python/pyproject.toml uses upstream pyproject_npu.toml with a static source-snapshot version; this is not an upstream release version"
+      ],
+      "snapshot_package_version": "0.0.0+ascend.f30df723bf14"
+    },
+    "deepgemm-ascend": {
+      "repository": "https://github.com/deepseek-ai/DeepGEMM-Ascend.git",
+      "ref": "main",
+      "commit": "8491bbb4b8c02a094a2318965f50c70438a3e73c",
+      "submodules": [
+        {
+          "path": "deepgemm-ascend/third-party/clangd-ascend",
+          "repository": "https://github.com/deepseek-ai/clangd-ascend.git",
+          "commit": "f407eca30e07e647ce2e556f9b08e145b65362c7"
+        },
+        {
+          "path": "deepgemm-ascend/third-party/deep-jit",
+          "repository": "https://github.com/deepseek-ai/DeepJIT.git",
+          "commit": "65f513952b8771408a19202f65e36398522db6db"
+        },
+        {
+          "path": "deepgemm-ascend/third-party/magic_enum",
+          "repository": "https://github.com/Neargye/magic_enum.git",
+          "commit": "b233b96e49d371bad00300f59b5ba581100b8745"
+        }
+      ]
+    }
+  }
+}

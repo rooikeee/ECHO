@@ -1,239 +1,94 @@
-# OSDI'26 Artifact Evaluation for *ECHO: Efficient KV Cache Offloading with Lossless Prefetching for Serving Native Sparse Attention LLMs*
+# ECHO — Ascend 开发分支
 
-## Hardware Requirements
+本分支以 Ascend 上游源码作为后续移植的基础，包含两个开发目录：
 
-All tests are run on a server with:
-
-- 8 x NVIDIA H20 GPUs (96 GB HBM each)
-- 1.5 TB CPU memory
-- GPUs connected to the host via PCIe Gen5
-
-## Preparation
-
-This docker image already contains:
-
-- The current repo (ECHO) at `/workspace/ECHO`, including `sglang/` and `DeepGEMM/`
-- A pre-built environment that can run the source code (both `sglang` and `DeepGEMM` have been built, installed and tested)
-- The InfiniteBench test dataset:
-  - All requests: `/workspace/infini-100K-110K.jsonl`
-  - Per-task splits: `/workspace/infinibench_task/` (`code_debug.jsonl`, `code_run.jsonl`, `longbook_choice_eng.jsonl`, `longbook_qa_eng.jsonl`)
-
-### Download the model
-
-Before running tests, download the model (DeepSeek-V3.2 with W4 AWQ):
-
-```bash
-modelscope download --local_dir /data1/dsv32awq QuantTrio/DeepSeek-V3.2-AWQ
-```
-
-We use `/data1/dsv32awq` as the default directory. If you want to change it, export the environment variable `DSV32W4` to the desired directory:
-
-```bash
-export DSV32W4=/path/to/DeepSeek-V3.2-AWQ
-```
-
-### Activate the prepared environment
-
-```bash
-source /workspace/ECHO/.venv/bin/activate
-```
-
-Now you can run the following tests.
-
-### Optional: re-build the project
-
-1. Re-build `sglang`:
-   ```bash
-   cd /workspace/ECHO/sglang
-   uv pip install -e "python"
-   ```
-2. Re-build `sgl-kernel`:
-   ```bash
-   cd /workspace/ECHO/sglang/sgl-kernel
-   make build && uv pip install dist/*whl --force-reinstall --no-deps
-   ```
-3. Re-build `DeepGEMM`:
-   ```bash
-   cd /workspace/ECHO/DeepGEMM
-   ./install.sh && uv pip install dist/*whl --force-reinstall --no-deps
-   ```
-
-### Optional: tune the fused MoE kernel of SGLang
-
-On a new machine, `sglang` may need re-tuning of the fused MoE kernel:
-
-```bash
-cd /workspace/ECHO/sglang
-python benchmark/kernels/fused_moe_triton/tuning_fused_moe_triton.py \
-    --model "$DSV32W4" --tp-size 8 --dtype auto --tune
-```
-
-## Baselines under evaluation
-
-Throughout this README we use the following two labels to distinguish the systems being compared:
-
-| Label | System | Description |
+| 目录 | 上游 | 固定提交 |
 | --- | --- | --- |
-| `no-offload` | **SGLang (baseline)** | Vanilla SGLang, all KV cache kept on GPU HBM. |
-| `offload` | **ECHO (ours)** | SGLang + ECHO, KV cache offloaded to CPU (`NSA_KV_OFFLOAD=1`), with a bounded GPU-side NSA cache of size `NSA_DEV_CACHE_SIZE`. |
+| `sglang-ascend/` | `Ascend/ascend-sglang` | `f30df723bf146d4a8037010b0b11939a601df423` |
+| `deepgemm-ascend/` | `deepseek-ai/DeepGEMM-Ascend` | `8491bbb4b8c02a094a2318965f50c70438a3e73c` |
 
+完整来源、第三方依赖提交和本地修改记录见 [upstreams.lock.json](upstreams.lock.json)。
+两个目录的主体代码直接纳入本仓库，方便在同一分支修改；DeepGEMM 的第三方依赖使用固定提交的 Git 子模块。
 
-## End-to-End Generation Throughput
+## 当前状态
 
-> All commands in this section should be executed under `/workspace/ECHO/sglang`.
+- 跨机器交接优先阅读：[当前实现](docs/ECHO_ASCEND_CURRENT_IMPLEMENTATION.md) 与
+  [半容量 PD 合部实验复现](docs/ECHO_ASCEND_REPRODUCTION.md)。新入口按原始
+  ShareGPT 脚本使用 TP8/DP8、100 请求和完整请求率扫描，只测 offload/recall。
+  每 rank 主机逻辑池/热池目标为 499,968/99,968 token，本轮尚未完成模型测试。
 
-For the generation throughput results in Figures 12–13, use `e2e_test_pd_infini.sh`.
+- 已用上述源码替换原来的 `sglang/` 和 `DeepGEMM/`。
+- SGLang 默认安装配置已切换为上游 `python/pyproject_npu.toml` 的依赖。
+  原默认配置保留为 `python/pyproject_cuda.toml`。
+- SGLang 保留上游的多硬件后端代码；本分支默认安装和后续开发针对 NPU。
+- 上游源码导入本身没有移植 ECHO 的 KV 卸载、回搬和融合预取。
+  2026-10-09 已新增不依赖 DeepGEMM 的实验性 Ascend 精确 recall 路径，
+  单卡算子及 Graph 验证已通过，完整模型验证范围见
+  [Recall 实现说明](docs/ECHO_RECALL_IMPLEMENTATION.md)。预测与融合预取尚未实现。
+- 2026-10-10 已接入 ECHO 的 TP/DP attention，沿用上游并行与 NPU Graph 路径。
+  小型随机 NSA 模型的 TP2/DP1、TP2/DP2、TP4/DP2、TP8/DP8 对照已通过；
+  尚未验收完整 AWQ 模型的 DP 精度与性能，不包含 PD 分离。
+  实现、测试结果及硬件告警限制见 [TP/DP 接入记录](docs/ECHO_PARALLEL_SUPPORT.md)。
+- `top-k-figures/` 是原始 CUDA 分析工具，暂未适配 NPU；其中的数据仍需 Git LFS 下载。
 
-The script boots a Prefill / Decode (PD) disaggregated SGLang deployment on TP=8, DP=8 (with DP attention) and runs `python/sglang/bench_serving.py` against the InfiniteBench 100K–110K dataset (`/workspace/infini-100K-110K.jsonl`, 318 prompts).
+## 与当前机器的兼容性
 
-It runs two back-to-back configurations on the same deployment topology:
+2026-09-30 检查的机器为 ARM64 / openEuler、Ascend 910、CANN 9.1.0。
 
-1. **SGLang baseline (`no-offload`)** — vanilla SGLang, KV cache kept on GPU.
-2. **ECHO (`offload`)** — KV cache offloaded to CPU (`NSA_KV_OFFLOAD=1`), GPU-side NSA cache of size `NSA_DEV_CACHE_SIZE`.
+**导入的官方 DeepGEMM-Ascend 首发版本面向 Ascend 950，要求 CANN 9.20。当前机器不满足其声明的运行环境。**
+源码替换并不意味着它已能在本机编译或运行；910 支持需要另外验证和适配。
+详见 [DeepGEMM 上游要求](deepgemm-ascend/README.md#requirements)。
 
-### Figure 12 — all GPU HBM allocated to KV cache
+SGLang 的 NPU 安装文档提供了另一套依赖组合，需要与目标硬件及实际 CANN 环境核对：
+[SGLang NPU 安装说明](sglang-ascend/docs/platforms/ascend/ascend_npu.md)。
+源码导入阶段没有安装运行依赖或执行 NPU 测试。
+2026-10-08 已另行配置项目内的 CANN 8.5.0、ATB 和 `.venv-npu`，
+通过单卡微型 Qwen2 模型的服务启动、预热、NPU Graph 捕获、decode 重放和生成验证。
+使用入口、固定版本和验证范围见 [本机 NPU 环境](docs/NPU_ENVIRONMENT.md)。
+后续 ECHO 实现必须支持 NPU Graph；开发要求见 [AGENTS.md](AGENTS.md) 和
+[Ascend 迁移说明](docs/ASCEND_MIGRATION.md#npu-graph-实现要求)。
 
-```bash
-bash e2e_test_pd_infini.sh
-```
+## 准备源码与安装入口
 
-Results are saved in:
-
-- SGLang baseline: `infini-318/no-offload-<MMDD>/`
-- ECHO: `infini-318/offload-<MMDD>/`
-
-Paths are relative to the current working directory, and each directory contains one `req_rate_<RATE>.jsonl` + `req_rate_<RATE>.log` per request rate.
-
-### Figure 13 — constrained GPU pool size
-
-The size of the GPU-side pool can be changed via `--no-offload-max-total-tokens` (SGLang baseline) and `--offload-nsa-dev-cache-size` (ECHO):
-
-```bash
-bash e2e_test_pd_infini.sh --no-offload-max-total-tokens 200_000 --offload-nsa-dev-cache-size 200_000
-# or
-bash e2e_test_pd_infini.sh --no-offload-max-total-tokens 110_000 --offload-nsa-dev-cache-size 110_000
-```
-
-### Reducing the tested request rates
-
-By default the script sweeps the request rates `0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, inf`, which is time-consuming. For a quicker test:
-
-```bash
-bash e2e_test_pd_infini.sh --request-rates 0.8,0.9,inf
-```
-
-### All options of `e2e_test_pd_infini.sh`
-
-| Option | Applies to | Description |
-| --- | --- | --- |
-| `--no-offload-max-total-tokens VALUE` | SGLang baseline | Pass `VALUE` to the baseline decode server as `--max-total-tokens`. |
-| `--offload-nsa-dev-cache-size VALUE` | ECHO | `NSA_DEV_CACHE_SIZE` for the ECHO decode server (default `260_000`). |
-| `--no-offload-res-dir VALUE` | SGLang baseline | Output directory (default `infini-318/no-offload-<MMDD>`). |
-| `--offload-res-dir VALUE` | ECHO | Output directory (default `infini-318/offload-<MMDD>`). |
-| `--request-rates VALUE` | both | Comma-separated request rates to sweep (e.g. `0.1,0.5,inf`). |
-
-> Note: ECHO's prefetch is disabled by default. To enable it, export
-> `SGLANG_NSA_FUSE_LOGITS_RECALL_DECODE=1` and
-> `SGLANG_NSA_FUSE_LOGITS_RECALL_EXTEND=1` before launching the script.
-
-### Per-task throughput (Figure 14)
-
-To produce the per-task throughput results in Figure 14, use `e2e_test_pd_infini_task.sh`:
+在本仓库根目录初始化固定版本的第三方依赖：
 
 ```bash
-bash e2e_test_pd_infini_task.sh
+git submodule update --init --recursive
 ```
 
-This iterates over every `.jsonl` file in `$TASK_DATASET_DIR` (`/workspace/infinibench_task` by default) and runs the same SGLang-baseline-then-ECHO sweep for each task.
-
-For a quicker test:
+先在独立 Python 环境中按上游文档准备匹配的 `torch`、`torch_npu`、Triton-Ascend 和 NPU 算子库。
+完成依赖核对后，SGLang 的本地安装入口为：
 
 ```bash
-bash e2e_test_pd_infini_task.sh --request-rates 0.8,0.9,inf
+python -m pip install -e ./sglang-ascend/python
 ```
 
-Results are saved under:
+SGLang 的包版本标记为 `0.0.0+ascend.f30df723bf14`，用于标识本仓库的固定源码快照，
+并非上游发布版本。这避免嵌入式源码错误地从 ECHO 的 Git 历史推导 SGLang 版本。
 
-- SGLang baseline: `infini-task/no-offload-<MMDD>/<task_name>/`
-- ECHO: `infini-task/offload-<MMDD>/<task_name>/`
-
-Options:
-
-| Option | Applies to | Description |
-| --- | --- | --- |
-| `--request-rates VALUE` | both | Comma-separated request rates to sweep. |
-| `--no-offload-res-dir VALUE` | SGLang baseline | Output directory. |
-| `--offload-res-dir VALUE` | ECHO | Output directory. |
-
-## End-to-End Latency
-
-> All commands in this section should be executed under `/workspace/ECHO/sglang`.
-
-For the ShareGPT latency results in Figure 15, use `e2e_test_mix_sharegpt.sh`:
+仅在满足 DeepGEMM 的硬件及工具链要求后，按其 [README](deepgemm-ascend/README.md) 安装：
 
 ```bash
-bash e2e_test_mix_sharegpt.sh
+cd deepgemm-ascend
+python -m pip install . --no-build-isolation
 ```
 
-The script launches a non-disaggregated SGLang server (TP=8, DP=8, DP attention, `moe_wna16` quant) and benchmarks the `sharegpt` dataset in the same two configurations (SGLang baseline, then ECHO).
+上述命令是源码安装入口。本机 SGLang 的已验证环境与使用命令见
+[本机 NPU 环境](docs/NPU_ENVIRONMENT.md)；DeepGEMM 未安装验证。
 
-For a quicker test with fewer request rates:
+## 原始 ECHO 与后续迁移
+
+原始 CUDA ECHO 的完整源码保存在提交：
+
+```text
+bc1b75c1000010d0ac6f032ebaac283255c050b1
+```
+
+原始实验说明见 [ECHO CUDA README](docs/reference/ECHO-CUDA-README.md)，其中路径和命令仅供迁移参考。
+可在不切换工作区的情况下读取原实现，例如：
 
 ```bash
-bash e2e_test_mix_sharegpt.sh --request-rates 0.8,0.9,inf
+git show bc1b75c1000010d0ac6f032ebaac283255c050b1:sglang/python/sglang/srt/mem_cache/recall_ops.py
 ```
 
-Results are saved in:
-
-- SGLang baseline: `sharegpt-100/no-offload-<MMDD>/`
-- ECHO: `sharegpt-100/offload-<MMDD>/`
-
-Each directory contains one `req_rate_<RATE>.jsonl` + `req_rate_<RATE>.log` per request rate.
-
-Options:
-
-| Option | Applies to | Description |
-| --- | --- | --- |
-| `--request-rates VALUE` | both | Comma-separated request rates (default `inf,0.9,...,0.1`). |
-| `--num-prompts VALUE` | both | Number of ShareGPT prompts per run (default `100`). |
-| `--warmup-requests VALUE` | both | Number of warm-up requests per run (default `0`). |
-| `--no-offload-res-dir VALUE` | SGLang baseline | Output directory. |
-| `--offload-res-dir VALUE` | ECHO | Output directory. |
-| `--offload-nsa-dev-cache-size VALUE` | ECHO | `NSA_DEV_CACHE_SIZE` (default `200_000`). |
-| `--offload-max-total-tokens VALUE` | ECHO | `--max-total-tokens` (default `1_000_000`). |
-
-## Fused Prefetch Kernels (ECHO only)
-
-> All commands in this section should be executed under `/workspace/ECHO/DeepGEMM`.
-
-These microbenchmarks evaluate ECHO's fused prefetch kernels in isolation; there is no corresponding SGLang baseline here.
-
-The results for **intra-query** prefetch in Figure 18 can be produced with:
-
-```bash
-python test_fuse.py decode_prefetch
-```
-
-The results for **inter-query** prefetch in Figure 19 can be produced with:
-
-```bash
-python test_fuse.py prefill_prefetch
-```
-
-## Troubleshooting
-
-- If a server fails to start, inspect the corresponding log in the working directory:
-  - SGLang baseline: `prefill_no_offload.log`, `decode_no_offload.log`, `router_no_offload.log`, `mix_sharegpt_no_offload.log`.
-  - ECHO: `prefill.log`, `decode.log`, `router.log`, `mix_sharegpt_offload.log`.
-- The launch scripts call `scripts/killall_sglang.sh` between the SGLang baseline and ECHO phases. If a previous run left processes alive, run it manually before retrying:
-  ```bash
-  bash /workspace/ECHO/sglang/scripts/killall_sglang.sh
-  ```
-- If GPU memory is not released between runs, use the helper script:
-  ```bash
-  bash /workspace/ECHO/sglang/scripts/ensure_vram_clear.sh
-  ```
-
-## Figure 7,8,9 — Top-K Figure Artifacts
-
-see `top-k-figures/README.md` for instructions to regenerate the artifacts in Figures 7–9.
+具体移植范围见 [Ascend 迁移说明](docs/ASCEND_MIGRATION.md)。
