@@ -1,3 +1,4 @@
 top-k-figures/data/**/*.pt filter=lfs diff=lfs merge=lfs -text
 # Unified-diff context lines use a single space for an empty source line.
 patches/vllm-ascend-*.patch whitespace=-blank-at-eol
+patches/memfabric-*.patch whitespace=-blank-at-eol

@@ -1,0 +1,22 @@
+--- a/memfabric_hybrid/_acc_offload_build.py
++++ b/memfabric_hybrid/_acc_offload_build.py
+@@ -188,15 +188,17 @@
+ 
+ def _build_kernel(tmp_dir, src_dir, soc_version, ascend_home, deadline):
+     build_dir = os.path.join(tmp_dir, "kernel_build")
++    staged_sources = os.path.join(tmp_dir, "kernel_sources")
++    shutil.copytree(os.path.join(src_dir, _KERNEL_SRC_DIR), staged_sources)
+     _run_cmd(
+         [
+             "cmake",
+             "-S",
+-            os.path.join(src_dir, _KERNEL_SRC_DIR),
++            staged_sources,
+             "-B",
+             build_dir,
+             "-DSOC_VERSION=" + soc_version,
+-            "-DCMAKE_BUILD_TYPE=RELEASE",
++            "-DCMAKE_BUILD_TYPE=Release",
+             "-DASCEND_HOME_PATH=" + ascend_home,
+         ],
+         "cmake_configure",

@@ -1,0 +1,165 @@
+--- a/vllm-ascend/vllm_ascend/attention/sfa_kv_offload.py
++++ b/vllm-ascend/vllm_ascend/attention/sfa_kv_offload.py
+@@ -57,6 +57,7 @@
+     get_sparse_kv_offload_manager,
+ )
+ from vllm_ascend.utils import enable_dsa_cp
++from vllm_ascend.distributed.kv_transfer.sparse_kv_offload.shared_hot_layout import shared_hot_layout
+ 
+ 
+ @dataclass
+@@ -194,6 +195,7 @@
+         self.lim_mtp_layers = max(1, getattr(draft_hf, "num_nextn_predict_layers", 1))
+         self.lim_reuse_topk = getattr(draft_hf, "index_share_for_mtp_iteration", False)
+         steps = self.copy_sfa_metadata_steps
++        self.shared_hot_layout = shared_hot_layout(vllm_config, cfg.topk_buffer_size, 128)
+         self.copy_sfa_hot_tokens = cfg.topk_buffer_size
+         self.copy_sfa_stride_blocks = cfg.topk_buffer_size // 128 + 2
+         self.copy_sfa_blocks = torch.arange(self.copy_sfa_stride_blocks, dtype=torch.int32, device=device)
+@@ -357,10 +359,17 @@
+ 
+         cache_blocks = cache[:, None] // 128
+         blocks = self.copy_sfa_blocks[None, :]
+-        physical = upload("block_bases", pools_np * self.copy_sfa_stride_blocks)[:, None]
++        physical_np = pools_np * self.copy_sfa_stride_blocks
++        if self.shared_hot_layout is not None:
++            physical_np = self.shared_hot_layout.token_bases(pools_np) // 128
++        physical = upload("block_bases", physical_np)[:, None]
+         ring_blocks = self.copy_sfa_stride_blocks - 2 + (prefix[:, None] // 128 + blocks - cache_blocks) % 2
+         self.copy_sfa_hbm_block_table[step, :count].copy_(
+-            physical + torch.where(is_short[:, None] | (blocks < cache_blocks), blocks, ring_blocks)
++            physical + (torch.where(active[:, None],
++                torch.where(is_short[:, None] | (blocks < cache_blocks), blocks, ring_blocks),
++                blocks % (self.shared_hot_layout.dummy_stride // 128))
++                if self.shared_hot_layout is not None else
++                torch.where(is_short[:, None] | (blocks < cache_blocks), blocks, ring_blocks))
+         )
+         metadata.copy_sfa_hbm_block_table = self.copy_sfa_hbm_block_table[step, :count]
+         # The block table already has persistent CpuGpuBuffer storage owned by
+@@ -378,7 +387,7 @@
+             )
+             self.copy_sfa_tail_src[step, :count].copy_(source_ids.clamp_min(0) * 128)
+             self.copy_sfa_tail_dst[step, :count].copy_(
+-                pools[:, None].to(torch.int64) * self.copy_sfa_stride_blocks * 128
++                physical.to(torch.int64) * 128
+                 + self.copy_sfa_hot_tokens
+                 + tail_blocks % 2 * 128
+             )
+@@ -408,13 +417,17 @@
+         metadata.slot_mapping.masked_fill_(token_invalid[: metadata.slot_mapping.numel()], -1)
+         logical_positions = seq_lens[token_rows] - widths[token_rows] + token_offsets
+         token_pools_np = np.where(token_active_np, pools_np[rows_np], self.copy_sfa_pool_capacity + rows_np)
+-        row_base = upload("token_bases", token_pools_np * self.copy_sfa_stride_blocks * 128)
++        token_bases_np = token_pools_np * self.copy_sfa_stride_blocks * 128
++        if self.shared_hot_layout is not None:
++            token_bases_np = self.shared_hot_layout.token_bases(token_pools_np)
++        row_base = upload("token_bases", token_bases_np)
+         self.copy_sfa_device_slots[step, :tokens].copy_(
+             row_base
+             + torch.where(
+                 is_short[token_rows] & token_active,
+                 logical_positions,
+-                self.copy_sfa_hot_tokens + logical_positions % 256,
++                (torch.where(token_active, self.copy_sfa_hot_tokens, 2048)
++                 if self.shared_hot_layout is not None else self.copy_sfa_hot_tokens) + logical_positions % 256,
+             )
+         )
+         metadata.copy_sfa_device_slots = self.copy_sfa_device_slots[step, :tokens]
+--- a/vllm-ascend/vllm_ascend/worker/model_runner_v1.py
++++ b/vllm-ascend/vllm_ascend/worker/model_runner_v1.py
+@@ -3530,6 +3530,7 @@
+                 self._copy_sfa_need_eager_tail_restore,
+                 dense_fills,
+             ) = prepare_copy_sfa_request_slots(
++                resident_capacity=((getattr(self.vllm_config.kv_transfer_config, "kv_connector_extra_config", None) or {}).get("echo_shared_hot_cache") or {}).get("request_capacity"),
+                 req_ids=self.input_batch.req_ids[:num_reqs],
+                 live_req_ids=self.input_batch.req_id_to_index,
+                 slots=self._offload_pool_slots.np,
+--- a/vllm-ascend/vllm_ascend/distributed/kv_transfer/sparse_kv_offload/sparse_kv_offload_manager.py
++++ b/vllm-ascend/vllm_ascend/distributed/kv_transfer/sparse_kv_offload/sparse_kv_offload_manager.py
+@@ -20,6 +20,7 @@
+     get_tp_group,
+ )
+ from vllm.logger import logger
++from vllm_ascend.distributed.kv_transfer.sparse_kv_offload.shared_hot_layout import shared_hot_layout
+ from vllm.utils.math_utils import cdiv
+ from vllm.v1.attention.backend import AttentionBackend
+ from vllm.v1.kv_cache_interface import (
+@@ -123,6 +124,9 @@
+     )
+     if sparse_kv_offload_config.use_fused_copy_sfa:
+         max_num_topk_rows = max(max_num_topk_rows, 2 * (vllm_config.scheduler_config.max_num_seqs + 2))
++        layout = shared_hot_layout(vllm_config, topk_buffer_size, vllm_config.cache_config.block_size)
++        if layout is not None:
++            max_num_topk_rows = layout.allocation_rows
+         topk_buffer_size += 2 * vllm_config.cache_config.block_size
+     topk_buffer_k_size_bytes = max_num_topk_rows * topk_buffer_size * num_kv_heads * k_dim * torch.bfloat16.itemsize
+     topk_buffer_v_size_bytes = max_num_topk_rows * topk_buffer_size * num_kv_heads * v_dim * torch.bfloat16.itemsize
+--- a/vllm-ascend/vllm_ascend/distributed/kv_transfer/sparse_kv_offload/copy_sfa_topk_slots.py
++++ b/vllm-ascend/vllm_ascend/distributed/kv_transfer/sparse_kv_offload/copy_sfa_topk_slots.py
+@@ -75,6 +75,7 @@
+     block_size: int,
+     hot_tokens: int,
+     dummy: bool,
++    resident_capacity: int | None = None,
+ ) -> tuple[dict[str, int], int, bool, dict[int, tuple[int, int]]]:
+     """Prepare CPU row ownership and return updated state plus rollback work.
+ 
+@@ -96,7 +97,7 @@
+             req: slot for req, slot in request_slots.items() if req in live_req_ids or req in prebound_slots
+         }
+         used = set(request_slots.values()) | set(prebound_slots.values())
+-        available = iter(slot for slot in range(capacity) if slot not in used)
++        available = iter(slot for slot in range(resident_capacity or capacity) if slot not in used)
+         for row, req in enumerate(req_ids):
+             if req not in request_slots:
+                 slot = prebound_slots[req] if req in prebound_slots else next(available)
+--- /dev/null
++++ b/vllm-ascend/vllm_ascend/distributed/kv_transfer/sparse_kv_offload/shared_hot_layout.py
+@@ -0,0 +1,46 @@
++"""Opt-in request-owned resident cache with compact, private graph scratch rows."""
++from dataclasses import dataclass
++import numpy as np
++
++DUMMY_HOT_TOKENS = 2048
++
++@dataclass(frozen=True)
++class SharedHotLayout:
++    request_capacity: int
++    logical_capacity: int
++    hot_tokens: int
++    block_size: int
++
++    @property
++    def stride(self):
++        return self.hot_tokens + 2 * self.block_size
++
++    @property
++    def dummy_stride(self):
++        return DUMMY_HOT_TOKENS + 2 * self.block_size
++
++    @property
++    def allocation_rows(self):
++        tokens = self.request_capacity * self.stride + self.logical_capacity * self.dummy_stride
++        return (tokens + self.stride - 1) // self.stride
++
++    def token_bases(self, slots):
++        slots = np.asarray(slots, dtype=np.int64)
++        real = slots < self.logical_capacity
++        if np.any(slots < 0) or np.any(slots >= 2 * self.logical_capacity):
++            raise ValueError('Invalid shared-cache logical slot')
++        if np.any(real & (slots >= self.request_capacity)):
++            raise ValueError('Shared resident cache exhausted; scheduler admission must wait')
++        return np.where(real, slots * self.stride,
++                        self.request_capacity * self.stride + (slots-self.logical_capacity)*self.dummy_stride)
++
++
++def shared_hot_layout(config, hot_tokens, block_size):
++    transfer = getattr(config, 'kv_transfer_config', None)
++    extra = (getattr(transfer, 'kv_connector_extra_config', None) or {}).get('echo_shared_hot_cache')
++    if extra is None:
++        return None
++    capacity = int(extra['request_capacity'])
++    if not 0 < capacity <= config.scheduler_config.max_num_seqs:
++        raise ValueError('Invalid memory-derived resident request capacity')
++    return SharedHotLayout(capacity, config.scheduler_config.max_num_seqs + 2, hot_tokens, block_size)

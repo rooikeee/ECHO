@@ -1,0 +1,13 @@
+--- a/vllm-ascend/csrc/cmake/func.cmake
++++ b/vllm-ascend/csrc/cmake/func.cmake
+@@ -246,7 +246,9 @@
+             COMMAND mkdir -p ${CUSTOM_OPS_INFO_DIR}
+             COMMAND cp -f ${OPS_INFO_JSON} ${CUSTOM_OPS_INFO_DIR}
+             DEPENDS opbuild_gen_default opbuild_gen_inner opbuild_gen_exc
+-                    ${OPS_INFO_INI} ${OPS_INFO_INNER_INI} ${OPS_INFO_EXCLUDE_INI}
++                    $<TARGET_FILE:op_host_aclnn>
++                    $<TARGET_FILE:op_host_aclnnInner>
++                    $<TARGET_FILE:op_host_aclnnExc>
+     )
+ 
+     add_custom_target(${OPS_INFO_TARGET} ALL
