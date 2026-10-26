@@ -1,0 +1,68 @@
+--- a/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/fused_lightning_indexer_manage_union.h
++++ b/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/fused_lightning_indexer_manage_union.h
+@@ -2381,6 +2381,51 @@
+         return finalCount;
+     }
+ 
++    // Each route's misses and the merged occurrences are source-ordered.
++    // Stable route compaction therefore restores each miss prefix directly.
++    // Eviction has released the input pair buffer used for this scratch.
++    __aicore__ inline void PrepareTopkRowsVector(
++        uint32_t total, LocalTensor<uint32_t> occurrences,
++        LocalTensor<int32_t> unionDestinations,
++        LocalTensor<float> destinationStorage, LocalTensor<float> scratch)
++    {
++        constexpr uint32_t capacity = OCCURRENCE_FAST_CAPACITY;
++        const uint32_t aligned = (total + 63U) / 64U * 64U;
++        auto sourceOffsets = scratch.ReinterpretCast<uint32_t>();
++        auto values = scratch[capacity].ReinterpretCast<uint32_t>();
++        auto routes = scratch[2U * capacity].ReinterpretCast<uint32_t>();
++        auto mask = scratch[3U * capacity].ReinterpretCast<uint8_t>();
++        Sync<HardEvent::S_V>(HardEvent::S_V);
++        ShiftRight(sourceOffsets, occurrences, OCCURRENCE_UNION_SHIFT, total);
++        PipeBarrier<PIPE_V>();
++        ShiftLeft(sourceOffsets, sourceOffsets, 2U, total);
++        PipeBarrier<PIPE_V>();
++        Gather(values.ReinterpretCast<float>(), unionDestinations.ReinterpretCast<float>(), sourceOffsets, 0U, total);
++        ShiftLeft(routes, occurrences, 32U - OCCURRENCE_UNION_SHIFT, total);
++        PipeBarrier<PIPE_V>();
++        ShiftRight(routes, routes, 32U - OCCURRENCE_ROUTE_BITS, total);
++        Sync<HardEvent::V_S>(HardEvent::V_S);
++        for (uint32_t i = total; i < aligned; ++i) {
++            routes.SetValue(i, UINT32_MAX);
++            values.SetValue(i, 0U);
++        }
++        Sync<HardEvent::S_V>(HardEvent::S_V);
++        GatherMaskParams compactParams;
++        compactParams.repeatTimes = 1;
++        compactParams.src0BlockStride = 1;
++        compactParams.src0RepeatStride = LIKernel::B32_VEC_REPEAT_STRIDE;
++        compactParams.src1RepeatStride = LIKernel::B32_VEC_REPEAT_STRIDE;
++        for (uint32_t route = 0U; route < ROUTES; ++route) {
++            CompareScalar(mask, routes.ReinterpretCast<int32_t>(), static_cast<int32_t>(route), CMPMODE::EQ, aligned);
++            PipeBarrier<PIPE_V>();
++            uint64_t copied = 0U;
++            GatherMask(destinationStorage[route * TOPK].ReinterpretCast<uint32_t>(), values,
++                       mask.ReinterpretCast<uint32_t>(), true, aligned, compactParams, copied);
++            PipeBarrier<PIPE_V>();
++        }
++        Sync<HardEvent::V_S>(HardEvent::V_S);
++    }
++
+     // The LI owner tagged every merged miss occurrence with its final route
+     // and miss-prefix position.  Distribute assigned union slots through that
+     // compact map, avoiding four topk_src_ids GM reads and four source joins.
+@@ -2632,8 +2677,11 @@
+             static_cast<uint32_t>(validatedRow), count, lengths, input,
+             merged, unionSources, unionDestinations);
+         if (captureOccurrences) {
+-            PrepareTopkRows(total, updated, occurrences, unionDestinations,
+-                            merged);
++            if (updated == count) {
++                PrepareTopkRowsVector(total, occurrences, unionDestinations, merged, input);
++            } else {
++                PrepareTopkRows(total, updated, occurrences, unionDestinations, merged);
++            }
+         } else {
+             PrepareTopkRowsFallback(batch, lengths, updated, unionSources,
+                                     unionDestinations, input, merged);

@@ -86,6 +86,7 @@ target/
 err.log
 tmp*.txt
 profile-*
+!/scripts/profile-echo-lim-bottleneck-npu.py
 *exp-res/
 recall-rate/
 trace*.json
@@ -129,3 +130,7 @@ deepgemm-ascend/deep_gemm_cpp*.so
 *.ncu-rep
 # Existing historical LFS pointers stay tracked; do not add new tensor dumps.
 /top-k-figures/data/
+
+# Independent upstream source snapshots used for vLLM Ascend experiments.
+/vllm-ascend/
+/vllm/

@@ -1,0 +1,358 @@
+--- a/vllm-ascend/csrc/torch_binding.cpp
++++ b/vllm-ascend/csrc/torch_binding.cpp
+@@ -3634,7 +3634,7 @@
+         "Tensor(a!) cache_slots_pool, Tensor(b!) topk_src_ids, "
+         "Tensor(c!) topk_dst_slots, Tensor(d!) topk_miss_counts, "
+         "Tensor(e!) miss_src_ids, Tensor(f!) miss_dst_slots, "
+-        "Tensor(g!) miss_counts) -> ()"
++        "Tensor(g!) miss_counts, Tensor? prefetch_context=None) -> ()"
+     );
+     ops.impl("npu_fused_lightning_indexer_manage", torch::kPrivateUse1,
+              &vllm_ascend::npu_fused_lightning_indexer_manage);
+--- a/vllm-ascend/csrc/torch_binding_meta.cpp
++++ b/vllm-ascend/csrc/torch_binding_meta.cpp
+@@ -529,7 +529,7 @@
+     const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&,
+     const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&,
+     at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+-    at::Tensor)
++    at::Tensor, const c10::optional<at::Tensor>&)
+ {
+ }
+ 
+--- a/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_host/op_api/aclnn_fused_lightning_indexer_manage.cpp
++++ b/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_host/op_api/aclnn_fused_lightning_indexer_manage.cpp
+@@ -8,7 +8,7 @@
+     const aclTensor *, const aclTensor *, const aclTensor *, const aclTensor *,
+     const aclTensor *, const aclTensor *, const aclTensor *, const aclTensor *,
+     const aclTensor *, const aclTensor *, const aclTensor *, const aclTensor *,
+-    uint64_t *, aclOpExecutor **);
++    const aclTensor *, uint64_t *, aclOpExecutor **);
+ extern aclnnStatus aclnnInnerFusedLightningIndexerManage(
+     void *, uint64_t, aclOpExecutor *, const aclrtStream);
+ 
+@@ -19,7 +19,8 @@
+     const aclTensor *actualSeqLengthsQuery, const aclTensor *actualSeqLengthsKey,
+     const aclTensor *offloadSeqLengthsKey, const aclTensor *numCacheTokens,
+     const aclTensor *requestState, const aclTensor *reqPoolEntries,
+-    const aclTensor *cacheSlotsPool, const aclTensor *topkSrcIds,
++    const aclTensor *cacheSlotsPool, const aclTensor *prefetchContext,
++    const aclTensor *topkSrcIds,
+     const aclTensor *topkDstSlots, const aclTensor *topkMissCounts,
+     const aclTensor *missSrcIds, const aclTensor *missDstSlots,
+     const aclTensor *missCounts, const aclTensor *cacheSlotsPoolOut,
+@@ -29,7 +30,7 @@
+         indexWeights, queryDequantScale, query, indexKeyDequantScale,
+         indexKeyCache, indexBlockTable, actualSeqLengthsQuery,
+         actualSeqLengthsKey, offloadSeqLengthsKey, numCacheTokens,
+-        requestState, reqPoolEntries, cacheSlotsPool, topkSrcIds,
++        requestState, reqPoolEntries, cacheSlotsPool, prefetchContext, topkSrcIds,
+         topkDstSlots, topkMissCounts, missSrcIds, missDstSlots, missCounts,
+         cacheSlotsPoolOut, workspaceSize, executor);
+ }
+--- a/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_host/op_api/aclnn_fused_lightning_indexer_manage.h
++++ b/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_host/op_api/aclnn_fused_lightning_indexer_manage.h
+@@ -13,7 +13,8 @@
+     const aclTensor *actualSeqLengthsQuery, const aclTensor *actualSeqLengthsKey,
+     const aclTensor *offloadSeqLengthsKey, const aclTensor *numCacheTokens,
+     const aclTensor *requestState, const aclTensor *reqPoolEntries,
+-    const aclTensor *cacheSlotsPool, const aclTensor *topkSrcIds,
++    const aclTensor *cacheSlotsPool, const aclTensor *prefetchContext,
++    const aclTensor *topkSrcIds,
+     const aclTensor *topkDstSlots, const aclTensor *topkMissCounts,
+     const aclTensor *missSrcIds, const aclTensor *missDstSlots,
+     const aclTensor *missCounts, const aclTensor *cacheSlotsPoolOut,
+--- a/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_host/fused_lightning_indexer_manage_def.cpp
++++ b/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_host/fused_lightning_indexer_manage_def.cpp
+@@ -49,6 +49,10 @@
+             .DataTypeList({ge::DT_INT32})
+             .FormatList({ge::FORMAT_ND}).AutoContiguous();
+ 
++        this->Input("prefetch_context").ParamType(OPTIONAL)
++            .DataTypeList({ge::DT_INT64})
++            .FormatList({ge::FORMAT_ND}).AutoContiguous();
++
+         this->Output("topk_src_ids").ParamType(REQUIRED)
+             .DataTypeList({ge::DT_INT32}).FormatList({ge::FORMAT_ND});
+         this->Output("topk_dst_slots").ParamType(REQUIRED)
+--- a/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/fused_lightning_indexer_manage_torch_adpt.h
++++ b/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/fused_lightning_indexer_manage_torch_adpt.h
+@@ -16,7 +16,8 @@
+     const at::Tensor& req_pool_entries, at::Tensor cache_slots_pool,
+     at::Tensor topk_src_ids, at::Tensor topk_dst_slots,
+     at::Tensor topk_miss_counts, at::Tensor miss_src_ids,
+-    at::Tensor miss_dst_slots, at::Tensor miss_counts) {
++    at::Tensor miss_dst_slots, at::Tensor miss_counts,
++    const c10::optional<at::Tensor>& prefetch_context) {
+   constexpr int64_t kTopK = LIMConfig::TOPK;
+   constexpr int64_t kMissCapacity = LIMConfig::MISS_CAPACITY;
+   constexpr int64_t kBlockSize = LIMConfig::CACHE_BLOCK_SIZE;
+@@ -101,12 +102,19 @@
+     TORCH_CHECK(tensor.is_contiguous(), "all LIM-MTP tensors must be contiguous.");
+   }
+ 
++  if (prefetch_context.has_value()) {
++    const auto& ctx = *prefetch_context;
++    TORCH_CHECK(ctx.device() == device && ctx.is_contiguous() &&
++                    ctx.scalar_type() == at::kLong && ctx.dim() == 2 &&
++                    ctx.size(0) == total_queries && ctx.size(1) == 14,
++                "ECHO prefetch context must be NPU int64 [T,14].");
++  }
+   EXEC_NPU_CMD(
+       aclnnFusedLightningIndexerManage,
+       index_weights, query_dequant_scale, query, index_key_dequant_scale,
+       index_key_cache, index_block_table, actual_seq_lengths_query,
+       actual_seq_lengths_key, offload_seq_lengths_key, num_cache_tokens,
+-      request_state, req_pool_entries, cache_slots_pool, topk_src_ids,
++      request_state, req_pool_entries, cache_slots_pool, prefetch_context, topk_src_ids,
+       topk_dst_slots, topk_miss_counts, miss_src_ids, miss_dst_slots,
+       miss_counts, cache_slots_pool);
+ }
+--- a/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/fused_lightning_indexer_manage.cpp
++++ b/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/fused_lightning_indexer_manage.cpp
+@@ -274,11 +274,17 @@
+                 offloadSeqLengthsKey, requestState, blockTable,                                                       \
+                 topkSourceIds, topkSlots, unionPair0, unionPair1, scoreScratch, thresholdScratch, routeMissCounts,      \
+                 user, tiling_data, &tPipe);                                                                             \
++        op.InitPrefetch(prefetchContext);                                                                               \
+         op.Process();                                                                                                   \
+         if ASCEND_IS_AIV {                                                                                              \
+             SyncAll();                                                                                                  \
+             if (GetBlockIdx() % LIMConfig::AIVS_PER_AIC == 0U) {                                                       \
+                 tPipe.Reset();                                                                                          \
++                if (prefetchContext != nullptr) {                                                                       \
++                    EchoPrefetch::PublishCutoffs(prefetchContext, thresholdScratch, requestState, topkSourceIds, actualSeqLengthsQuery, \
++                                                  tiling_data->bSize, &tPipe);                                           \
++                    tPipe.Reset();                                                                                      \
++                }                                                                                                       \
+                 const uint32_t unionOwner = GetBlockIdx() / LIMConfig::AIVS_PER_AIC;                                   \
+                 const uint32_t unionOwners = GetBlockNum();                                                            \
+                 if (!FinalizeStandardCounts(requestState, actualSeqLengthsQuery, missCount,                            \
+@@ -310,6 +316,7 @@
+     __gm__ uint8_t *offloadSeqLengthsKey,
+     __gm__ uint8_t *cacheTokens, __gm__ uint8_t *requestState,
+     __gm__ uint8_t *reqPoolEntries, __gm__ uint8_t *cacheSlots,
++    __gm__ uint8_t *prefetchContext,
+     __gm__ uint8_t *topkSourceIds, __gm__ uint8_t *topkSlots,
+     __gm__ uint8_t *topkMissCounts, __gm__ uint8_t *missSrcIds,
+     __gm__ uint8_t *missDstSlots, __gm__ uint8_t *missCount,
+--- a/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/lightning_indexer_service_vector.h
++++ b/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/lightning_indexer_service_vector.h
+@@ -23,6 +23,7 @@
+ #include "fused_lightning_indexer_manage_constants.h"
+ #include "lightning_indexer_common.h"
+ #include "lightning_indexer_vector.h"
++#include "echo_indexer_prefetch.h"
+ 
+ namespace LIKernel {
+ using namespace LICommon;
+@@ -58,6 +59,19 @@
+     __aicore__ inline LIVector(){};
+     __aicore__ inline void ProcessVec(const LICommon::RunInfo &info);
+     __aicore__ inline void ProcessLD();
++    __aicore__ inline void InitPrefetch(__gm__ uint8_t *context)
++    {
++        prefetchContext_ = context;
++    }
++    __aicore__ inline void RunPrefetch(TPipe *pipe)
++    {
++        if (prefetchContext_ == nullptr || (blockId_ % 2) != 1) return;
++        pipe->Reset();
++        EchoPrefetch::Run<K_T>(prefetchContext_, scoreScratchGm,
++            cacheSlotsGm, reqPoolEntriesGm, actualSeqLengthsQueryGm,
++            requestStateGm, batchSize_, scoreStride_, s2BaseSize_,
++            cacheSlotsSize_, poolSize_, pipe);
++    }
+     __aicore__ inline void InitBuffers(TPipe *pipe);
+     __aicore__ inline void InitParams(const struct LICommon::ConstInfo &constInfo,
+                                       const FusedLightningIndexerManageTilingData *__restrict tilingData);
+@@ -99,6 +113,7 @@
+     // =================================常量区=================================
+ 
+ private:
++    __gm__ uint8_t *prefetchContext_ = nullptr;
+     // ================================Local Buffer区====================================
+     // queue
+     TQue<QuePosition::VECIN, 1> inQueue_;
+@@ -712,6 +727,20 @@
+                     scoreScratchGm[static_cast<uint64_t>(routeIndex) * scoreStride_ +
+                                    static_cast<uint32_t>(cuBaseS2Idx)],
+                     reduceOutInner, cuS2LenVecAlign);
++                if (prefetchContext_ != nullptr) {
++                    // Publish readiness after the raw score DMA, before any
++                    // TopK scratch reuse. One query owner consumes these tiles.
++                    SetWaitFlag<HardEvent::MTE3_S>(HardEvent::MTE3_S);
++                    GlobalTensor<int64_t> context;
++                    context.SetGlobalBuffer((__gm__ int64_t *)prefetchContext_);
++                    GlobalTensor<int32_t> ready;
++                    ready.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(routeIndex * 14 + 5));
++                    auto flag = reduceOutInner.template ReinterpretCast<int32_t>();
++                    flag.SetValue(0, 1);
++                    SetWaitFlag<HardEvent::S_MTE3>(HardEvent::S_MTE3);
++                    DataCopyPad(ready[routeIndex * cacheSlotsSize_ + cuBaseS2Idx],
++                                flag, {1, 4, 0, 0});
++                }
+                 SetFlag<HardEvent::MTE3_V>(scoreMte3ToV[scoreBufferIndex]);
+                 scoreWritePending[scoreBufferIndex] = true;
+             }
+--- a/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/lightning_indexer_kernel.h
++++ b/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/lightning_indexer_kernel.h
+@@ -65,6 +65,10 @@
+                                 __gm__ uint8_t *routeMissCounts,
+                                 __gm__ uint8_t *workspace, const FusedLightningIndexerManageTilingData *__restrict tiling, TPipe *tPipe);
+     __aicore__ inline void Process();
++    __aicore__ inline void InitPrefetch(__gm__ uint8_t *context)
++    {
++        if ASCEND_IS_AIV { vectorService.InitPrefetch(context); }
++    }
+ 
+     // =================================类型定义区=================================
+     using Q_T = typename LIT::queryType;
+@@ -608,6 +612,7 @@
+         return;
+     }
+     ProcessMain();
++    if ASCEND_IS_AIV { vectorService.RunPrefetch(pipe); }
+     ProcessDecode();
+ }
+ 
+--- /dev/null
++++ b/vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/echo_indexer_prefetch.h
+@@ -0,0 +1,137 @@
++#ifndef ECHO_INDEXER_PREFETCH_H
++#define ECHO_INDEXER_PREFETCH_H
++
++#include "kernel_operator.h"
++
++namespace EchoPrefetch {
++using namespace AscendC;
++using LIServiceVec::SetWaitFlag;
++
++__aicore__ inline void PublishCutoffs(
++    __gm__ uint8_t *contextAddr, __gm__ uint8_t *cutoffAddr,
++    __gm__ uint8_t *statesAddr, __gm__ uint8_t *topkAddr, __gm__ uint8_t *endsAddr,
++    uint32_t batches, TPipe *pipe)
++{
++    GlobalTensor<int64_t> context;
++    GlobalTensor<int32_t> states, topk, ends;
++    GlobalTensor<float> cutoffs;
++    context.SetGlobalBuffer((__gm__ int64_t *)contextAddr);
++    cutoffs.SetGlobalBuffer((__gm__ float *)cutoffAddr);
++    states.SetGlobalBuffer((__gm__ int32_t *)statesAddr);
++    topk.SetGlobalBuffer((__gm__ int32_t *)topkAddr);
++    ends.SetGlobalBuffer((__gm__ int32_t *)endsAddr);
++    TBuf<TPosition::VECCALC> buffer;
++    pipe->InitBuffer(buffer, 32);
++    auto value = buffer.Get<float>();
++    const uint32_t queries = ends.GetValue(batches - 1);
++    for (uint32_t q = GetBlockIdx() / 2; q < queries; q += GetBlockNum()) {
++        uint32_t b = 0;
++        while (q >= static_cast<uint32_t>(ends.GetValue(b))) ++b;
++        GlobalTensor<float> prediction;
++        prediction.SetGlobalBuffer((__gm__ float *)context.GetValue(q * 14));
++        if (states.GetValue(b) != -3 && topk.GetValue(q * LIMConfig::TOPK + LIMConfig::TOPK - 1) >= 0) {
++            DataCopyPad(value, cutoffs[q * LIMConfig::THRESHOLD_WORKSPACE_STRIDE],
++                        {1, 4, 0, 0}, {false, 0, 0, 0});
++            SetWaitFlag<HardEvent::MTE2_MTE3>(HardEvent::MTE2_MTE3);
++        } else {
++            value.ReinterpretCast<uint32_t>().SetValue(0, 0x7f800000U);
++            SetWaitFlag<HardEvent::S_MTE3>(HardEvent::S_MTE3);
++        }
++        DataCopyPad(prediction[q], value, {1, 4, 0, 0});
++        SetWaitFlag<HardEvent::MTE3_S>(HardEvent::MTE3_S);
++    }
++}
++
++// Internal descriptor ABI is owned by scripts/echo_indexer_prefetch.py.
++// Only one AIV owns each query's budget; no inter-core atomic return is needed.
++template <typename T>
++__aicore__ inline void Run(
++    __gm__ uint8_t *contextAddr, GlobalTensor<float> scores,
++    GlobalTensor<int32_t> slots, GlobalTensor<int32_t> entries,
++    GlobalTensor<uint32_t> queryEnds, GlobalTensor<int32_t> states,
++    uint32_t batches, uint32_t scoreStride, uint32_t tileSize,
++    uint32_t sourceCapacity, uint32_t poolSize, TPipe *pipe)
++{
++    GlobalTensor<int64_t> context;
++    context.SetGlobalBuffer((__gm__ int64_t *)contextAddr);
++    TBuf<TPosition::VECCALC> scoreBuffer, kvBuffer, metadataBuffer;
++    pipe->InitBuffer(scoreBuffer, tileSize * sizeof(float));
++    pipe->InitBuffer(kvBuffer, 576 * sizeof(T));
++    pipe->InitBuffer(metadataBuffer, 32);
++    auto scoreUb = scoreBuffer.Get<float>();
++    auto kvUb = kvBuffer.Get<T>();
++    auto metaUb = metadataBuffer.Get<int32_t>();
++    const uint32_t owner = GetBlockIdx() / 2;
++    const uint32_t queries = queryEnds.GetValue(batches - 1);
++    for (uint32_t q = owner; q < queries; q += GetBlockNum()) {
++        uint32_t b = 0;
++        while (q >= queryEnds.GetValue(b)) ++b;
++        if (states.GetValue(b) != -1) continue;
++        const int32_t row = entries.GetValue(b);
++        if (row < 0 || static_cast<uint32_t>(row) >= poolSize) continue;
++        const uint32_t base = q * 14;
++        GlobalTensor<float> thresholds;
++        GlobalTensor<int32_t> budgets, counts, sources, ready, dramTable, lengths;
++        GlobalTensor<T> stagingKv, stagingRope, hostKv, hostRope;
++        thresholds.SetGlobalBuffer((__gm__ float *)context.GetValue(base));
++        budgets.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 1));
++        counts.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 2));
++        sources.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 3));
++        stagingKv.SetGlobalBuffer((__gm__ T *)context.GetValue(base + 4));
++        ready.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 5));
++        hostKv.SetGlobalBuffer((__gm__ T *)context.GetValue(base + 6));
++        hostRope.SetGlobalBuffer((__gm__ T *)context.GetValue(base + 7));
++        dramTable.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 8));
++        stagingRope.SetGlobalBuffer((__gm__ T *)context.GetValue(base + 9));
++        lengths.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 13));
++        const uint32_t tableWidth = context.GetValue(base + 10);
++        const uint32_t hostBlocks = context.GetValue(base + 11);
++        const uint32_t capacity = context.GetValue(base + 12);
++        const int32_t requested = budgets.GetValue(q);
++        const int32_t length = lengths.GetValue(b);
++        const float threshold = thresholds.GetValue(q);
++        if (requested <= 0 || length <= 0 || static_cast<uint32_t>(length) > sourceCapacity ||
++            static_cast<uint32_t>(requested) > capacity || !(threshold < 3.402823466e38F)) continue;
++        uint32_t count = 0;
++        for (uint32_t first = 0; first < static_cast<uint32_t>(length) && count < requested; first += tileSize) {
++            int32_t published;
++            do {
++                DataCopyPad(metaUb, ready[static_cast<uint64_t>(q) * sourceCapacity + first],
++                            {1, 4, 0, 0}, {false, 0, 0, 0});
++                SetWaitFlag<HardEvent::MTE2_S>(HardEvent::MTE2_S);
++                published = metaUb.GetValue(0);
++            } while (published == 0);
++            const uint32_t valid = first + tileSize > length ? length - first : tileSize;
++            DataCopyPad(scoreUb, scores[static_cast<uint64_t>(q) * scoreStride + first],
++                        {1, static_cast<uint16_t>(valid * sizeof(float)), 0, 0}, {false, 0, 0, 0});
++            SetWaitFlag<HardEvent::MTE2_S>(HardEvent::MTE2_S);
++            for (uint32_t i = 0; i < valid && count < requested; ++i) {
++                const uint32_t source = first + i;
++                if (!(scoreUb.GetValue(i) > threshold) ||
++                    slots.GetValue(static_cast<uint64_t>(row) * sourceCapacity + source) >= 0) continue;
++                if (source / 128 >= tableWidth) continue;
++                const int32_t block = dramTable.GetValue(static_cast<uint64_t>(b) * tableWidth + source / 128);
++                if (block < 0 || static_cast<uint32_t>(block) >= hostBlocks) continue;
++                const uint64_t hostRow = static_cast<uint64_t>(block) * 128 + source % 128;
++                DataCopyPad(kvUb, hostKv[hostRow * 512], {1, 512 * sizeof(T), 0, 0}, {false, 0, 0, 0});
++                DataCopyPad(kvUb[512], hostRope[hostRow * 64], {1, 64 * sizeof(T), 0, 0}, {false, 0, 0, 0});
++                SetWaitFlag<HardEvent::MTE2_MTE3>(HardEvent::MTE2_MTE3);
++                const uint64_t destination = static_cast<uint64_t>(q) * capacity + count;
++                DataCopyPad(stagingKv[destination * 512], kvUb, {1, 512 * sizeof(T), 0, 0});
++                DataCopyPad(stagingRope[destination * 64], kvUb[512], {1, 64 * sizeof(T), 0, 0});
++                SetWaitFlag<HardEvent::MTE3_S>(HardEvent::MTE3_S);
++                metaUb.SetValue(0, static_cast<int32_t>(source));
++                SetWaitFlag<HardEvent::S_MTE3>(HardEvent::S_MTE3);
++                DataCopyPad(sources[destination], metaUb, {1, 4, 0, 0});
++                SetWaitFlag<HardEvent::MTE3_S>(HardEvent::MTE3_S);
++                ++count;
++            }
++        }
++        metaUb.SetValue(0, static_cast<int32_t>(count));
++        SetWaitFlag<HardEvent::S_MTE3>(HardEvent::S_MTE3);
++        DataCopyPad(counts[q], metaUb, {1, 4, 0, 0});
++        SetWaitFlag<HardEvent::MTE3_S>(HardEvent::MTE3_S);
++    }
++}
++} // namespace EchoPrefetch
++#endif

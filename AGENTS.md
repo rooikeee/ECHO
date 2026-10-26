@@ -16,6 +16,10 @@ NPU Graph compatibility is required for the ECHO Ascend implementation.
 - The baseline uses a tiny Qwen2 model on one NPU. It does not establish ECHO,
   DeepSeek NSA, prefill graph, or multi-device support; validate those paths when
   implementing them and report the actual coverage.
+- ECHO operator profiling must use MTP=3 going forward. The target verification
+  phase has four query rows per request (one current token plus three drafts);
+  report target-phase time separately from the complete speculative round.
+  Keep the required tiny-model environment baseline distinct from this workload.
 
 See `docs/ASCEND_MIGRATION.md` and `docs/NPU_ENVIRONMENT.md` for the migration
 requirements, environment, and validation records.

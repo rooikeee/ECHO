@@ -1,0 +1,55 @@
+--- a/vllm-ascend/requirements.txt
++++ b/vllm-ascend/requirements.txt
+@@ -36,5 +36,5 @@
+ 
+ arctic-inference==0.1.1
+ transformers==5.14.1
+-fastapi<0.124.0
++fastapi>=0.133.0,<0.137.0
+ fastokens==0.2.0
+--- a/vllm-ascend/pyproject.toml
++++ b/vllm-ascend/pyproject.toml
+@@ -26,7 +26,7 @@
+     "quart",
+     "numba",
+     "xgrammar>=0.1.30",
+-    "fastapi<0.124.0",
++    "fastapi>=0.133.0,<0.137.0",
+     "fastokens==0.2.0",
+     "compressed_tensors>=0.11.0",
+     "arctic-inference==0.1.1",
+--- a/vllm-ascend/csrc/cmake/func.cmake
++++ b/vllm-ascend/csrc/cmake/func.cmake
+@@ -245,6 +245,8 @@
+             ${OPS_INFO_JSON}
+             COMMAND mkdir -p ${CUSTOM_OPS_INFO_DIR}
+             COMMAND cp -f ${OPS_INFO_JSON} ${CUSTOM_OPS_INFO_DIR}
++            DEPENDS opbuild_gen_default opbuild_gen_inner opbuild_gen_exc
++                    ${OPS_INFO_INI} ${OPS_INFO_INNER_INI} ${OPS_INFO_EXCLUDE_INI}
+     )
+ 
+     add_custom_target(${OPS_INFO_TARGET} ALL
+--- a/vllm-ascend/csrc/build_aclnn.sh
++++ b/vllm-ascend/csrc/build_aclnn.sh
+@@ -286,6 +286,10 @@
+ 
+   mkdir -p -- "$custom_ops_install_dir"
+ 
++  if [[ -d "${custom_ops_install_dir}/vendors/custom_transformer/scripts" ]]; then
++    chmod u+w "${custom_ops_install_dir}/vendors/custom_transformer/scripts"
++  fi
++
+   # Remove all top-level entries under custom_ops_install_dir except .gitkeep, including hidden files and directories.
+   find "$custom_ops_install_dir" -mindepth 1 -maxdepth 1 \
+     ! -name '.gitkeep' \
+--- a/vllm/requirements/common.txt
++++ b/vllm/requirements/common.txt
+@@ -33,7 +33,7 @@
+ pyzmq >= 25.0.0
+ msgspec
+ mistral_common[image] >= 1.11.6
+-opencv-python-headless >= 4.13.0    # required for video IO
++opencv-python-headless == 4.11.0.86    # NumPy 1.26 compatibility for Triton Ascend
+ pyyaml
+ six>=1.16.0; python_version > '3.11' # transitive dependency of pandas that needs to be the latest version for python 3.12
+ setuptools>=77.0.3,<81.0.0; python_version > '3.11' # Setuptools is used by triton, we need to ensure a modern version is installed for 3.12+ so that it does not try to import distutils, which was removed in 3.12

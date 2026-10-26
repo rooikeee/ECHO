@@ -1,0 +1,388 @@
+{
+  "measured_date": "2026-10-25",
+  "scope": "single_device_operator_graph_only",
+  "end_to_end_model_performance_validated": false,
+  "model_task_accuracy_validated": false,
+  "prefetch_default_enabled": false,
+  "mtp": 3,
+  "query_rows_per_request": 4,
+  "measurements": [
+    {
+      "name": "lim_pristine",
+      "source_artifact": "build/lim-copysfa-optimization/lim-pristine-glm32/result.json",
+      "source_sha256": "5c7362c4abcc5e4fcd4de3b13b03a8bf62440f25588034def48aabaca768ba6f",
+      "source_status": "completed",
+      "context": 64000,
+      "hot_tokens": 12288,
+      "batch": 16,
+      "indexer_heads": 32,
+      "union_misses_per_request": 400,
+      "event_mean_us": 481.998669107755,
+      "replays": 30,
+      "kernel": {
+        "mean": 474.4766,
+        "min": 471.451,
+        "max": 478.251,
+        "stdev": 2.285824367706308
+      },
+      "correctness": "three_exact_graph_replays_fixed_addresses",
+      "persistent_all_hit_replay": "passed"
+    },
+    {
+      "name": "lim_retained",
+      "source_artifact": "build/lim-copysfa-optimization/lim-restored-glm32/result.json",
+      "source_sha256": "bf65adb7948abb42e5b0c561cebcf335c16e3dabaa5e95cbb59c22c39e0f5f12",
+      "source_status": "completed",
+      "context": 64000,
+      "hot_tokens": 12288,
+      "batch": 16,
+      "indexer_heads": 32,
+      "union_misses_per_request": 400,
+      "event_mean_us": 466.0273343324661,
+      "replays": 30,
+      "kernel": {
+        "mean": 458.8448,
+        "min": 453.05,
+        "max": 462.711,
+        "stdev": 2.5442196760500035
+      },
+      "correctness": "three_exact_graph_replays_fixed_addresses",
+      "persistent_all_hit_replay": "passed"
+    },
+    {
+      "name": "copysfa_same_query",
+      "source_artifact": "build/lim-copysfa-optimization/copysfa-head4-preparation.json",
+      "source_sha256": "4b4948b8bf98e85b939096eba02e9d360582f0b4ff54c498ef85278a8d86885f",
+      "source_status": "passed",
+      "batch": 16,
+      "context": 64000,
+      "hot_tokens": 12288,
+      "note": "Four query rows share the same misses; kernel-only and preparation-inclusive timings differ",
+      "cases": [
+        {
+          "misses_per_row": 0,
+          "union_misses_per_request": 0,
+          "note": "four rows share misses; intentional high-overlap control",
+          "correctness": "passed",
+          "native4": {
+            "replays": 50,
+            "event_mean_us": 330.899600982666,
+            "event_median_us": 329.4000029563904,
+            "event_min_us": 316.19998812675476,
+            "event_p90_us": 348.1200039386749
+          },
+          "padded8": {
+            "replays": 50,
+            "event_mean_us": 331.7976015806198,
+            "event_median_us": 329.5599967241287,
+            "event_min_us": 317.79998540878296,
+            "event_p90_us": 341.7600095272064
+          },
+          "padded8_with_preparation": {
+            "replays": 50,
+            "event_mean_us": 335.3504014015198,
+            "event_median_us": 333.8399976491928,
+            "event_min_us": 278.0199944972992,
+            "event_p90_us": 348.60000014305115
+          }
+        },
+        {
+          "misses_per_row": 400,
+          "union_misses_per_request": 400,
+          "note": "four rows share misses; intentional high-overlap control",
+          "correctness": "passed",
+          "native4": {
+            "replays": 50,
+            "event_mean_us": 417.40840196609497,
+            "event_median_us": 417.7500009536743,
+            "event_min_us": 409.7200036048889,
+            "event_p90_us": 420.9800064563751
+          },
+          "padded8": {
+            "replays": 50,
+            "event_mean_us": 416.2563991546631,
+            "event_median_us": 416.8099910020828,
+            "event_min_us": 409.7599983215332,
+            "event_p90_us": 420.0400114059448
+          },
+          "padded8_with_preparation": {
+            "replays": 50,
+            "event_mean_us": 453.5807991027832,
+            "event_median_us": 453.7400007247925,
+            "event_min_us": 445.71998715400696,
+            "event_p90_us": 457.81999826431274
+          }
+        }
+      ]
+    },
+    {
+      "name": "chain_pristine",
+      "source_artifact": "build/lim-copysfa-optimization/chain-pristine-pr-glm64k/result.json",
+      "source_sha256": "4c70dd1b5bfb40b905d56605d69944259daea5239936a78b169a8698ae9be6b0",
+      "source_status": "completed_operator_chain_only",
+      "context": 64000,
+      "hot_tokens": 12288,
+      "indexer_heads": 32,
+      "actual_execution_devices": 1,
+      "modes": [
+        {
+          "mode": "baseline",
+          "batch": 16,
+          "mtp": 3,
+          "replays": 30,
+          "event_mean_us": 807.0620000362396,
+          "stages": {
+            "lim_us": 512.5098181818182,
+            "consumer_kernel_sum_us": 0,
+            "consumer_kernel_calls": 0,
+            "copy_sfa_us": 282.38336363636364,
+            "lim_to_sfa_span_us": 797.8181818181819,
+            "profile_chain_calls": 11,
+            "target_kernel_sum_us": 794.8931818181818
+          },
+          "original_union_misses_per_request": [
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400
+          ],
+          "correctness": "exact_cache_and_raw_indexer_outputs_attention_rtol_0.02_atol_0.002"
+        }
+      ],
+      "comparison_limit": "Matched shapes but native4 and padded8 use different random Attention query layout"
+    },
+    {
+      "name": "chain_retained",
+      "source_artifact": "build/lim-copysfa-optimization/chain-head4-glm64k/result.json",
+      "source_sha256": "64e02fa13b753b802d0df34241a0e129138365fa78978e2a690993bc304669af",
+      "source_status": "completed_operator_chain_only",
+      "context": 64000,
+      "hot_tokens": 12288,
+      "indexer_heads": 32,
+      "actual_execution_devices": 1,
+      "modes": [
+        {
+          "mode": "baseline",
+          "batch": 16,
+          "mtp": 3,
+          "replays": 30,
+          "event_mean_us": 796.232666571935,
+          "stages": {
+            "lim_us": 511.6460909090909,
+            "consumer_kernel_sum_us": 0,
+            "consumer_kernel_calls": 0,
+            "copy_sfa_us": 273.08181818181816,
+            "lim_to_sfa_span_us": 787.8181818181819,
+            "profile_chain_calls": 11,
+            "target_kernel_sum_us": 784.7279090909091
+          },
+          "original_union_misses_per_request": [
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400
+          ],
+          "correctness": "exact_cache_and_raw_indexer_outputs_attention_rtol_0.02_atol_0.002"
+        }
+      ],
+      "comparison_limit": "Matched shapes but native4 and padded8 use different random Attention query layout"
+    },
+    {
+      "name": "prefetch_comparison",
+      "source_artifact": "build/profiling/echo-prefetch-b16-mtp3-union400-20261025-r1/result.json",
+      "source_sha256": "164437bf7666026d7922a9371069bbad1cf369321e1e137695054f4536f8eb31",
+      "source_status": "completed_operator_chain_only",
+      "context": 40960,
+      "hot_tokens": 8192,
+      "indexer_heads": 64,
+      "actual_execution_devices": 1,
+      "modes": [
+        {
+          "mode": "baseline",
+          "batch": 16,
+          "mtp": 3,
+          "replays": 30,
+          "event_mean_us": 780.7506660620371,
+          "stages": {
+            "lim_us": 496.221,
+            "consumer_kernel_sum_us": 0,
+            "consumer_kernel_calls": 0,
+            "copy_sfa_us": 274.69463636363633,
+            "lim_to_sfa_span_us": 773.6363636363636,
+            "profile_chain_calls": 11,
+            "target_kernel_sum_us": 770.9156363636364
+          },
+          "original_union_misses_per_request": [
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400
+          ],
+          "correctness": "exact_cache_and_raw_indexer_outputs_attention_rtol_0.02_atol_0.002"
+        },
+        {
+          "mode": "context-budget-0",
+          "batch": 16,
+          "mtp": 3,
+          "replays": 30,
+          "event_mean_us": 2987.852660814921,
+          "stages": {
+            "lim_us": 515.627909090909,
+            "consumer_kernel_sum_us": 2134.4995454545456,
+            "consumer_kernel_calls": 17,
+            "copy_sfa_us": 308.2994545454545,
+            "lim_to_sfa_span_us": 2970.159090909091,
+            "profile_chain_calls": 11,
+            "target_kernel_sum_us": 2958.426909090909
+          },
+          "original_union_misses_per_request": [
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400
+          ],
+          "correctness": "exact_cache_and_raw_indexer_outputs_attention_rtol_0.02_atol_0.002"
+        },
+        {
+          "mode": "prefetch-64-history",
+          "batch": 16,
+          "mtp": 3,
+          "replays": 30,
+          "event_mean_us": 4671.4706261952715,
+          "stages": {
+            "lim_us": 2219.3646363636362,
+            "consumer_kernel_sum_us": 2137.6065454545455,
+            "consumer_kernel_calls": 17,
+            "copy_sfa_us": 288.99600000000004,
+            "lim_to_sfa_span_us": 4657.636363636364,
+            "profile_chain_calls": 11,
+            "target_kernel_sum_us": 4645.967181818182
+          },
+          "original_union_misses_per_request": [
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400
+          ],
+          "correctness": "exact_cache_and_raw_indexer_outputs_attention_rtol_0.02_atol_0.002"
+        }
+      ]
+    }
+  ],
+  "validation": [
+    {
+      "name": "lim_occurrence_graph",
+      "source_artifact": "build/lim-copysfa-optimization/lim-occurrence-graph.json",
+      "source_sha256": "e6841a51a0727f9fcc1b690e8a8834f977247f00964cbc8e518868cc4c47d135",
+      "status": "passed",
+      "case_count": 15,
+      "counts": [
+        1,
+        31,
+        32,
+        63,
+        64,
+        65,
+        127,
+        128,
+        511,
+        512,
+        513,
+        2048,
+        4095,
+        4096,
+        4097
+      ]
+    },
+    {
+      "name": "copysfa_four_heads_graph",
+      "source_artifact": "build/lim-copysfa-optimization/copysfa-head4-boundaries.json",
+      "source_sha256": "dfdf92af9b7d152ba90b0ff77790d5f1219f5319789e39a7e5921c1e2d859d23",
+      "status": "passed",
+      "case_count": 13,
+      "counts": [
+        0,
+        1,
+        31,
+        32,
+        63,
+        64,
+        127,
+        128,
+        400,
+        511,
+        512,
+        513,
+        2048
+      ]
+    }
+  ],
+  "interpretation_limits": [
+    "LIM metadata and KV exact comparisons use rtol=0 and atol=0.",
+    "Attention comparisons use rtol=0.02 and atol=0.002; no bitwise or model-quality claim.",
+    "Profiler pipe times overlap and stage timings must not be added to independent event timings.",
+    "All workloads use synthetic fixed scoring queries and controlled residency, not real model traces.",
+    "No throughput doubling or full-model superiority over the PR has been established.",
+    "Raw traces remain machine-local; hashes identify the source summaries but do not replace reruns."
+  ]
+}

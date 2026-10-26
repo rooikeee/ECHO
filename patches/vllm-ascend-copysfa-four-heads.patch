@@ -1,0 +1,51 @@
+--- a/vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/fused_scatter_copy_sparse_flash_attention_torch_adpt.h
++++ b/vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/fused_scatter_copy_sparse_flash_attention_torch_adpt.h
+@@ -48,10 +48,10 @@
+                   query.size(0) <= batch_size * kMaxQueryCount,
+               "Fused MTP T must satisfy B <= T <= 16B (MTP0..MTP15).");
+   const int64_t num_query_heads = query.size(1);
+-  TORCH_CHECK(num_query_heads >= 8 && num_query_heads <= 128 &&
++  TORCH_CHECK(num_query_heads >= 4 && num_query_heads <= 128 &&
+                   (num_query_heads & (num_query_heads - 1)) == 0,
+               "Fused MTP query head count N must be one of "
+-              "{8, 16, 32, 64, 128}.");
++              "{4, 8, 16, 32, 64, 128}.");
+   TORCH_CHECK(query_rope.dim() == 3 &&
+                   query_rope.size(0) == query.size(0) &&
+                   query_rope.size(1) == query.size(1) &&
+--- a/vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_host/fused_scatter_copy_sparse_flash_attention_tiling.cpp
++++ b/vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_host/fused_scatter_copy_sparse_flash_attention_tiling.cpp
+@@ -124,11 +124,11 @@
+     OPS_ERR_IF(!IsShape(q, {-1, -1, CKV_DIM}) ||
+                    totalQueryTokens < batchSize ||
+                    totalQueryTokens > batchSize * MAX_QUERY_COUNT ||
+-                   numQueryHeads < 8 || numQueryHeads > 128 ||
++                   numQueryHeads < 4 || numQueryHeads > 128 ||
+                    (numQueryHeads & (numQueryHeads - 1)) != 0,
+                OPS_LOG_E(context->GetNodeName(),
+                          "MTP query must be [T,N,512], B <= T <= 16B, "
+-                         "N in {8,16,32,64,128}."),
++                         "N in {4,8,16,32,64,128}."),
+                return ge::GRAPH_FAILED);
+     OPS_ERR_IF(!IsShape(qRope, {totalQueryTokens, q.GetDim(1), KPE_DIM}),
+                OPS_LOG_E(context->GetNodeName(),
+--- a/vllm-ascend/vllm_ascend/attention/sfa_kv_offload.py
++++ b/vllm-ascend/vllm_ascend/attention/sfa_kv_offload.py
+@@ -100,13 +100,16 @@
+ 
+ 
+ def prepare_copy_sfa_queries(query, query_rope):
+-    """Prepare contiguous queries for native 8/16/32/64/128-head tiles.
++    """Prepare contiguous queries for native 4/8/16/32/64/128-head tiles.
+ 
+     MLA shares KV across query heads, and softmax is independent per head.
++    GLM TP16 uses four heads directly, avoiding padding kernels on decode.
+     Zero-filled extra query heads cannot affect the original heads; callers
+     must return only the original head range from the kernel output.
+     """
+     heads = query.shape[1]
++    if heads == 4:
++        return query.contiguous(), query_rope.contiguous()
+     if 1 <= heads < 8:
+         padded_query = query.new_zeros((query.shape[0], 8, query.shape[2]))
+         padded_rope = query_rope.new_zeros((query_rope.shape[0], 8, query_rope.shape[2]))

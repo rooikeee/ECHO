@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "vllm": {
+    "repository": "https://github.com/vllm-project/vllm",
+    "commit": "ced6857afa0ea7b2e3f0846a62e1394e90f15607",
+    "archive": "vllm-ced6857.tar.gz",
+    "archive_sha256": "5309f930285a26629e3e49a8d022f81c0f99b2490e24fa86dddbd2cd4986dfee"
+  },
+  "vllm_ascend": {
+    "repository": "https://github.com/vllm-project/vllm-ascend",
+    "pull_request": 17392,
+    "kernel_dependency_pull_request": 16640,
+    "commit": "fcc49fe2520cea586efc59ac04d9a57442bfef0e",
+    "archive": "vllm-ascend-pr17392-fcc49fe.tar.gz",
+    "archive_sha256": "91dd4d26ad7e755d0a8180b87faa370c479597f93b7a03ef60496aa3885ee00b"
+  },
+  "original_vllm_ascend": {
+    "repository": "https://github.com/vllm-project/vllm-ascend",
+    "commit": "cc3cca4f2e7f038025e4c782b160753509de12b0",
+    "archive": "vllm-ascend-original-cc3cca.tar.gz",
+    "archive_sha256": "bb1985ba568544874070eb0c241b67edc533d621cece8fba35cf25bbf88f0146"
+  },
+  "catlass": {
+    "repository": "https://gitcode.com/cann/catlass.git",
+    "commit": "41bf90da655bba3c66d0acd7e00abe33960ecfd6"
+  },
+  "patch_order": [
+    "patches/vllm-ascend-environment.patch",
+    "patches/vllm-ascend-echo-indexer-prefetch.patch",
+    "patches/vllm-ascend-lim-slot-expansion.patch",
+    "patches/vllm-ascend-copysfa-four-heads.patch"
+  ],
+  "execution_defaults": {
+    "prefetch_enabled": false,
+    "mtp": 3,
+    "target_query_rows_per_request": 4
+  }
+}

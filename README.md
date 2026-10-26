@@ -10,6 +10,10 @@
 完整来源、第三方依赖提交和本地修改记录见 [upstreams.lock.json](upstreams.lock.json)。
 两个目录的主体代码直接纳入本仓库，方便在同一分支修改；DeepGEMM 的第三方依赖使用固定提交的 Git 子模块。
 
+vLLM-Ascend 的 ECHO 有界预取、LIM/CopySFA 优化、构建和算子测试见
+[README.vllm-ascend.md](README.vllm-ascend.md)。该路径使用独立的固定上游源码与补丁，
+预取默认关闭；已验证算子与 NPU Graph，尚无完整模型性能或精度验收。
+
 ## 当前状态
 
 - 跨机器交接优先阅读：[当前实现](docs/ECHO_ASCEND_CURRENT_IMPLEMENTATION.md) 与
