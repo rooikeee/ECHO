@@ -24,7 +24,10 @@ MTP3 每请求有4行 query；请求级 miss 是这4行合并去重后的数量�
 
 ## 源码组织
 
-上游完整副本及编译产物不提交。用固定版本和补丁恢复：
+**`vllm-ascend` 分支直接包含当前完整的 `vllm-ascend/` 源码及优化后的算子**，
+不是只有补丁的交付。接手说明见 [开发交接文档](docs/VLLM_ASCEND_HANDOFF.md)。
+该目录已经应用以下补丁，不要再次应用。vLLM 核心与 CATLASS 作为固定版本依赖准备，
+编译产物、模型及本机环境不提交。
 
 | 来源 | 固定提交 |
 | --- | --- |
@@ -41,7 +44,7 @@ MTP3 每请求有4行 query；请求级 miss 是这4行合并去重后的数量�
 4. [CopySFA 4-head 优化](patches/vllm-ascend-copysfa-four-heads.patch)：适配层、tiling 校验、服务 query 准备。
 
 Python 预取 owner 和消费 kernel 在 [scripts/echo_indexer_prefetch.py](scripts/echo_indexer_prefetch.py)。
-原生实现恢复后位于 `vllm-ascend/csrc/attention/fused_lightning_indexer_manage/`
+原生实现直接位于 `vllm-ascend/csrc/attention/fused_lightning_indexer_manage/`
 和 `fused_scatter_copy_sparse_flash_attention/`。
 
 ## 当前结果
@@ -97,15 +100,17 @@ B16、MTP3、上下文40960、热缓存8192、**每请求 union miss400**：
 需要匹配的 Ascend 910C、CANN 9.1、Python 3.11、Torch 2.10、torch-npu 2.10、
 Triton-Ascend 3.2.2。环境隔离与安装步骤见 [环境文档](docs/VLLM_ASCEND_ENVIRONMENT.md)。
 
-在**尚未存在** `vllm/`、`vllm-ascend/` 的工作区执行：
+克隆 `vllm-ascend` 分支后，在**尚未存在** `vllm/` 和 CATLASS 的工作区执行：
 
 ```bash
-python3 scripts/prepare-vllm-ascend-sources.py --references
+python3 scripts/prepare-vllm-ascend-sources.py --use-checked-in-ascend --references
 # 配置环境文档中的独立 .venv-vllm-ascend 和 CANN 后：
 bash scripts/build-vllm-ascend-native.sh
 ```
 
-准备脚本验证上游归档 SHA256，并按顺序应用全部补丁，不覆盖已有源码。
+准备脚本验证上游归档 SHA256，保留已提交的 Ascend 源码，仅对新建的 vLLM 核心应用兼容补丁。
+不覆盖已有源码。要在独立空目录验证归档和补丁恢复，可使用不带
+`--use-checked-in-ascend` 的 `--destination /path/to/empty-directory` 模式。
 `--skip-catlass` 仅用于源码重放检查；缺少 CATLASS 时不能构建。
 原版/PR对照可使用 `bash scripts/build-pr17392-reference.sh` 单独编译；
 原版与PR的原始 `csrc` 相同，可将该参考构建的 `.so` 和 `_cann_ops_custom/`

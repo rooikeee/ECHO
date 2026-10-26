@@ -57,7 +57,9 @@ def extract(archive, destination):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", type=Path, default=ROOT,
-                        help="must not already contain vllm or vllm-ascend")
+                        help="destination for sources; existing trees are never overwritten")
+    parser.add_argument("--use-checked-in-ascend", action="store_true",
+                        help="keep the versioned vllm-ascend tree; prepare only vLLM and dependencies")
     parser.add_argument("--archive-dir", type=Path, default=ROOT / "build/reference")
     parser.add_argument("--skip-catlass", action="store_true", help="source/patch verification only; cannot build kernels")
     parser.add_argument("--references", action="store_true",
@@ -67,16 +69,23 @@ def main():
     destination = args.destination.resolve()
     cache = args.archive_dir.resolve()
     cache.mkdir(parents=True, exist_ok=True)
-    for name in ("vllm", "vllm-ascend"):
+    if args.use_checked_in_ascend and not (destination / "vllm-ascend/CMakeLists.txt").is_file():
+        raise FileNotFoundError("--use-checked-in-ascend requires the versioned vllm-ascend source")
+    for name in (("vllm",) if args.use_checked_in_ascend else ("vllm", "vllm-ascend")):
         if (destination / name).exists():
             raise FileExistsError(destination / name)
+    if not args.skip_catlass and (destination / "vllm-ascend/csrc/third_party/catlass").exists():
+        raise FileExistsError("CATLASS already exists; refusing to overwrite it")
     archives = {name: archive_for(lock[name], cache) for name in ("vllm", "vllm_ascend")}
     extract(archives["vllm"], destination / "vllm")
-    extract(archives["vllm_ascend"], destination / "vllm-ascend")
+    if not args.use_checked_in_ascend:
+        extract(archives["vllm_ascend"], destination / "vllm-ascend")
     patch_env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(destination.parent))
     for patch in lock["patch_order"]:
-        run(["git", "apply", "--check", str(ROOT / patch)], cwd=destination, env=patch_env)
-        run(["git", "apply", str(ROOT / patch)], cwd=destination, env=patch_env)
+        # The checked-in Ascend source already contains all Ascend-side changes.
+        include = ["--include=vllm/*"] if args.use_checked_in_ascend else []
+        run(["git", "apply", "--check", *include, str(ROOT / patch)], cwd=destination, env=patch_env)
+        run(["git", "apply", *include, str(ROOT / patch)], cwd=destination, env=patch_env)
     if not args.skip_catlass:
         dependency = lock["catlass"]
         target = destination / "vllm-ascend/csrc/third_party/catlass"
@@ -93,7 +102,8 @@ def main():
     receipt = {"status": "sources_prepared_not_built", "destination": str(destination),
                "lock_sha256": digest(ROOT / "vllm-ascend.lock.json"),
                "patch_sha256": {p: digest(ROOT / p) for p in lock["patch_order"]},
-               "catlass_prepared": not args.skip_catlass, "references": args.references}
+               "catlass_prepared": not args.skip_catlass, "references": args.references,
+               "checked_in_ascend": args.use_checked_in_ascend}
     (destination / "build/vllm-source-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt, indent=2))
 

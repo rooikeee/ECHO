@@ -2,9 +2,10 @@
 
 Start with [the vLLM-Ascend README](../README.vllm-ascend.md) for the retained
 implementation, measured results, and validation limits. The committed
-`vllm-ascend.lock.json` and `scripts/prepare-vllm-ascend-sources.py` restore the
-pinned archives and all patches. Run the preparation command only when the
-upstream directories do not exist; existing working sources are never replaced.
+`vllm-ascend/` source is included on the `vllm-ascend` branch. Use
+`python3 scripts/prepare-vllm-ascend-sources.py --use-checked-in-ascend --references`
+to restore the pinned vLLM core and CATLASS dependencies on a fresh checkout.
+Existing working sources are never replaced. See [the handoff](VLLM_ASCEND_HANDOFF.md).
 
 ## Source Layout
 
@@ -16,9 +17,10 @@ upstream directories do not exist; existing working sources are never replaced.
   `41bf90da655bba3c66d0acd7e00abe33960ecfd6`, pinned by `.gitmodules`.
 - `.venv-vllm-ascend/`: isolated Python environment; no system site packages.
 
-The two top-level upstream directories are source archives, not Git clones;
-GitHub Git transport was unavailable. They are ignored by the ECHO repository.
-The original archives and provenance are retained under `build/reference/`.
+The Ascend source was imported from an archive and includes the versioned local
+patches; it is tracked directly by ECHO, not a nested Git repository. The vLLM
+core, CATLASS checkout, archives and build outputs remain ignored. Original
+archives and provenance are retained locally under `build/reference/`.
 
 ## Environment Entry
 

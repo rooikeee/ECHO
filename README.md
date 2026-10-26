@@ -1,17 +1,22 @@
-# ECHO — Ascend 开发分支
+# ECHO / vLLM-Ascend 算子交付分支
 
-本分支以 Ascend 上游源码作为后续移植的基础，包含两个开发目录：
+本分支直接包含当前 vLLM-Ascend 源码和优化后的 LIM / CopySFA 算子。
+接手开发请先阅读 [交接文档](docs/VLLM_ASCEND_HANDOFF.md) 和
+[构建、测试及结果说明](README.vllm-ascend.md)。ECHO 预取为默认关闭的实验路径。
+
+仓库保留已有 Ascend 开发历史，包含以下源码目录：
 
 | 目录 | 上游 | 固定提交 |
 | --- | --- | --- |
+| `vllm-ascend/` | `vllm-project/vllm-ascend` PR 17392 + 本地优化 | `fcc49fe2520cea586efc59ac04d9a57442bfef0e` |
 | `sglang-ascend/` | `Ascend/ascend-sglang` | `f30df723bf146d4a8037010b0b11939a601df423` |
 | `deepgemm-ascend/` | `deepseek-ai/DeepGEMM-Ascend` | `8491bbb4b8c02a094a2318965f50c70438a3e73c` |
 
 完整来源、第三方依赖提交和本地修改记录见 [upstreams.lock.json](upstreams.lock.json)。
-两个目录的主体代码直接纳入本仓库，方便在同一分支修改；DeepGEMM 的第三方依赖使用固定提交的 Git 子模块。
+这些目录的主体代码直接纳入本仓库；DeepGEMM 的第三方依赖使用固定提交的 Git 子模块。
 
 vLLM-Ascend 的 ECHO 有界预取、LIM/CopySFA 优化、构建和算子测试见
-[README.vllm-ascend.md](README.vllm-ascend.md)。该路径使用独立的固定上游源码与补丁，
+[README.vllm-ascend.md](README.vllm-ascend.md)。该路径直接提交源码，保留固定上游版本和补丁用于追溯，
 预取默认关闭；已验证算子与 NPU Graph，尚无完整模型性能或精度验收。
 
 ## 当前状态

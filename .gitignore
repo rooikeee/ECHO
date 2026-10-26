@@ -131,6 +131,5 @@ deepgemm-ascend/deep_gemm_cpp*.so
 # Existing historical LFS pointers stay tracked; do not add new tensor dumps.
 /top-k-figures/data/
 
-# Independent upstream source snapshots used for vLLM Ascend experiments.
-/vllm-ascend/
+# vLLM core is restored from the lock file; vLLM-Ascend source is versioned.
 /vllm/
