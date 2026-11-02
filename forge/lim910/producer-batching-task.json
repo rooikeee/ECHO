@@ -1,0 +1,26 @@
+{
+  "workspace": "/home/l50066329/code/ECHO-lim-echo-forge",
+  "description": "forge/lim910/description.md",
+  "editable_files": [
+    "vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/echo_indexer_prefetch.h"
+  ],
+  "evaluate": [
+    "python3",
+    "scripts/forge-lim-eval.py",
+    "--output",
+    "{output}",
+    "--device",
+    "6",
+    "--profile-repeats",
+    "3"
+  ],
+  "baseline_result": "build/forge-lim/consumer-campaign-r2/iteration-01/eval/eval.json",
+  "rounds": 1,
+  "minimum_gain": 0.015,
+  "plateau_window": 3,
+  "agent_timeout_s": 900,
+  "eval_timeout_s": 1800,
+  "iteration_guidance": [
+    "After vectorfilter fullchain ~2.06ms, LIM .83ms vs baseline .49ms. Next bounded bundle: batch Host DMA and metadata publication per query in EchoPrefetch::Run. Current realKV loop waits MTE2_MTE3 then MTE3_S twice for each of64sources. Fixedcapacity64 and BF16 totaldata73728B +vectorfilter<12KiB fit192KiB. Allocate contiguous KV UB [64,512],ropeUB[64,64],sourceIDsUB64 beforequeryloop; issue each eligible source's two Host DataCopyPad into separate staging UB offsets, retain ascendingIDs andinvalidtablechecks; after scan/budgetend, fence MTE2_MTE3 once, emit contiguous CKV+rope stagingGM copies and sourceIDs then count onlyafter copies complete. Existingreadypolls/tileDMAfencesmay drain pipeline but no per-tokenwaits. A querybuffer cannot be reused until prior queryMTE3 completes. Handle capacity/descriptors unsupported by fallbackcurrentpath and UBfit bound usingwidearith; producerdescriptorcapacity64 is actualcontractbut single-query check supports capacityother (default64). Hostoffsets unchanged nofakeprefetch. Bytes >uint16 useDataCopyPad blockLen wide DataCopyExtParams or split boundedchunks;64*512*2=65536 exceeds currentuint16 length. SourceIDs lengthcount4 with DMApad UBunderalignment handle32B metadata. Frozen consumerunchanged. Preserve partialtile, thresholds, allnegslots, budgets0/7/64. After compilation all frozenchecks mustpass and perqueryprefetchcounts andorderedIDs asbefore. Avoid broadreads; inspect currentheaderandAscendDataCopy API only. If batchedpublication reduces measuredLIM latency, keep; otherwise revert.\n"
+  ]
+}

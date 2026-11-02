@@ -1,0 +1,25 @@
+{
+  "workspace": "/home/l50066329/code/ECHO-lim-echo-forge",
+  "description": "forge/lim910/description.md",
+  "editable_files": [
+    "scripts/echo_indexer_prefetch.py"
+  ],
+  "evaluate": [
+    "python3",
+    "scripts/forge-lim-eval.py",
+    "--output",
+    "{output}",
+    "--device",
+    "6"
+  ],
+  "baseline_result": "build/forge-lim/baseline-eval.json",
+  "rounds": 2,
+  "minimum_gain": 0.015,
+  "plateau_window": 3,
+  "agent_timeout_s": 900,
+  "eval_timeout_s": 1800,
+  "iteration_guidance": [
+    "Reduce fixed MTP consume cost without changing native ABI. Examine full32768 union width versus true maximum union_scan, repeated dense matching and unnecessary writes. Keep all dynamic tests.",
+    "Use last measured results and source. Improve MTP prefetch matching and consume overhead; preserve exact Source-to-slot semantics and fixed outputs. Avoid unsupported Triton scatter/scan lowering."
+  ]
+}

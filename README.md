@@ -4,6 +4,9 @@
 接手开发请先阅读 [交接文档](docs/VLLM_ASCEND_HANDOFF.md) 和
 [构建、测试及结果说明](README.vllm-ascend.md)。ECHO 预取为默认关闭的实验路径。
 
+2026-11-02 的 [910 LIM + ECHO / ForgeKernel 优化记录](docs/FORGE_LIM_910.md)
+包含实机耗时、全命中对照、回退实验和复现入口。本轮只优化、测试上述融合算子链。
+
 仓库保留已有 Ascend 开发历史，包含以下源码目录：
 
 | 目录 | 上游 | 固定提交 |

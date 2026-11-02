@@ -205,8 +205,9 @@ class EchoIndexerPrefetch:
 
 @triton.jit
 def _mtp_match_rows(Sources, Misses, Prefetched, Counts, States, Match, Remaining,
-                    P: tl.constexpr, Q: tl.constexpr, WIDTH: tl.constexpr,
-                    UNION: tl.constexpr, PP: tl.constexpr, BLOCK: tl.constexpr):
+                    P: tl.constexpr, Q: tl.constexpr, RAW_WIDTH: tl.constexpr,
+                    SCRATCH_WIDTH: tl.constexpr, UNION: tl.constexpr,
+                    PP: tl.constexpr, BLOCK: tl.constexpr):
     row = tl.program_id(0)
     b = row if UNION else row // Q
     i = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
@@ -215,7 +216,7 @@ def _mtp_match_rows(Sources, Misses, Prefetched, Counts, States, Match, Remainin
     # Skip candidate comparisons for padding, but define every prefix-scan cell.
     result = tl.full((BLOCK,), -1, tl.int32)
     if tl.program_id(1) * BLOCK < misses and tl.load(States + b) == -1:
-        source = tl.load(Sources + row * WIDTH + i, i < misses, -1)
+        source = tl.load(Sources + row * RAW_WIDTH + i, i < misses, -1)
         candidate = tl.load(Prefetched + b * Q * P + p, p < Q * P, -1)
         count = tl.load(Counts + b * Q + p // P, p < Q * P, 0)
         equal = ((source[:, None] == candidate[None, :]) &
@@ -224,28 +225,32 @@ def _mtp_match_rows(Sources, Misses, Prefetched, Counts, States, Match, Remainin
         # Lowest pooled candidate wins, including duplicates across query rows.
         result = tl.min(tl.where(equal, p[None, :], 2147483647), axis=1)
         result = tl.where(result == 2147483647, -1, result)
-    tl.store(Match + row * WIDTH + i, result)
-    tl.store(Remaining + row * WIDTH + i, ((i < misses) & (result < 0)).to(tl.int32))
+    tl.store(Match + row * SCRATCH_WIDTH + i, result)
+    tl.store(Remaining + row * SCRATCH_WIDTH + i, ((i < misses) & (result < 0)).to(tl.int32))
 
 
 @triton.jit
-def _mtp_commit_union(Match, Slots, StagingKV, StagingRope, HbmKV, HbmRope,
+def _mtp_commit_union(Match, Slots, Counts, States, StagingKV, StagingRope, HbmKV, HbmRope,
                       HbmTable, P: tl.constexpr, Q: tl.constexpr,
-                      TABLE_WIDTH: tl.constexpr, SCAN: tl.constexpr):
-    b, p = tl.program_id(0), tl.program_id(1)
-    i = tl.arange(0, SCAN)
-    match = tl.load(Match + b * 32768 + i)
-    position = tl.max(tl.where(match == p, i, -1), axis=0)
-    if position >= 0:
-        slot = tl.load(Slots + b * 32768 + position)
-        block = tl.load(HbmTable + b * TABLE_WIDTH + slot // 128)
-        row = block * 128 + slot % 128
-        d, r = tl.arange(0, 512), tl.arange(0, 64)
-        candidate = b * Q * P + p
-        kv = tl.load(StagingKV + candidate * 512 + d)
-        rope = tl.load(StagingRope + candidate * 64 + r)
-        tl.store(HbmKV + row * 512 + d, kv)
-        tl.store(HbmRope + row * 64 + r, rope)
+                      TABLE_WIDTH: tl.constexpr, RAW_WIDTH: tl.constexpr,
+                      SCAN: tl.constexpr):
+    b, lane = tl.program_id(0), tl.program_id(1)
+    # Read replay-local state on device; first-fill requests never speculate.
+    if tl.load(States + b) == -1:
+        count = tl.load(Counts + b)
+        for position in range(lane, count, 256):
+            # Unique union entries own commits, using the lowest matched candidate.
+            p = tl.load(Match + b * SCAN + position)
+            if p >= 0:
+                slot = tl.load(Slots + b * RAW_WIDTH + position)
+                block = tl.load(HbmTable + b * TABLE_WIDTH + slot // 128)
+                row = block * 128 + slot % 128
+                d, r = tl.arange(0, 512), tl.arange(0, 64)
+                candidate = b * Q * P + p
+                kv = tl.load(StagingKV + candidate * 512 + d)
+                rope = tl.load(StagingRope + candidate * 64 + r)
+                tl.store(HbmKV + row * 512 + d, kv)
+                tl.store(HbmRope + row * 64 + r, rope)
 
 
 @triton.jit
@@ -263,6 +268,25 @@ def _mtp_partition(Misses, Remaining, Prefix, Permutation, OutMisses, Used,
         tl.store(Used + row, tl.load(Misses + row) - count)
 
 
+@triton.jit
+def _mtp_copy_union_outputs(ScratchSources, ScratchSlots, RawSources, RawSlots,
+                            OutSources, OutSlots, SCAN: tl.constexpr,
+                            BLOCK: tl.constexpr):
+    row = tl.program_id(0)
+    start = tl.program_id(1) * BLOCK
+    i = start + tl.arange(0, BLOCK)
+    # SCAN and the 32768-column ABI are multiples of BLOCK: every tile is
+    # entirely scratch prefix or raw tail, including all padding cells.
+    if start < SCAN:
+        source = tl.load(ScratchSources + row * SCAN + i)
+        slot = tl.load(ScratchSlots + row * SCAN + i)
+    else:
+        source = tl.load(RawSources + row * 32768 + i)
+        slot = tl.load(RawSlots + row * 32768 + i)
+    tl.store(OutSources + row * 32768 + i, source)
+    tl.store(OutSlots + row * 32768 + i, slot)
+
+
 class EchoMTPIndexerPrefetch(EchoIndexerPrefetch):
     """Uniform four-query MTP3 target verification; budget remains per query.
 
@@ -276,16 +300,31 @@ class EchoMTPIndexerPrefetch(EchoIndexerPrefetch):
             raise ValueError("MTP3 target verification requires four rows and capacity=64.")
         super().__init__(case, host_kv, host_rope, dram_table, capacity)
         batch, device = len(case.q_values), case.query.device
-        self.union_matches = torch.empty(batch, 32768, dtype=torch.int32, device=device)
-        self.union_remaining = torch.empty_like(self.union_matches)
-        self.union_prefix = torch.empty_like(self.union_matches)
-        self.union_permutation = torch.empty(batch, 32768, dtype=torch.int64, device=device)
-        self.union_used = torch.zeros(batch, dtype=torch.int32, device=device)
+        # Steady unions contain at most four TopK rows; first-fill may
+        # populate the whole cache. Raw metadata keeps its 32768-column ABI.
         self.union_scan = triton.next_power_of_2(max(4 * 2048, max(case.cache_tokens)))
         if self.union_scan > 32768:
             raise ValueError("Request union exceeds supported capacity.")
+        self.union_matches = torch.empty(batch, self.union_scan, dtype=torch.int32, device=device)
+        self.union_remaining = torch.empty_like(self.union_matches)
+        self.union_prefix = torch.empty_like(self.union_matches)
+        self.union_permutation = torch.empty(batch, self.union_scan, dtype=torch.int64, device=device)
+        self.union_used = torch.zeros(batch, dtype=torch.int32, device=device)
         self.buffers += (self.union_matches, self.union_remaining, self.union_prefix,
                          self.union_permutation, self.union_used)
+
+    def allocate_outputs(self, outputs):
+        """Allocate contiguous union scratch with the fixed outputs before capture."""
+        outputs = super().allocate_outputs(outputs)
+        union_sources, union_slots = outputs[3:5]
+        self.union_sources_scratch = torch.empty(
+            (union_sources.shape[0], self.union_scan),
+            dtype=union_sources.dtype, device=union_sources.device)
+        self.union_slots_scratch = torch.empty(
+            (union_slots.shape[0], self.union_scan),
+            dtype=union_slots.dtype, device=union_slots.device)
+        self.buffers += (self.union_sources_scratch, self.union_slots_scratch)
+        return outputs
 
     def consume(self, outputs, hbm_table, hbm_kv, hbm_rope):
         if self.outputs is None:
@@ -294,23 +333,34 @@ class EchoMTPIndexerPrefetch(EchoIndexerPrefetch):
         out_sources, out_slots, out_misses, out_union_sources, out_union_slots, out_union_counts = self.outputs
         batch, queries = union_sources.shape[0], sources.shape[0]
         pp = triton.next_power_of_2(4 * self.capacity)
-        _mtp_match_rows[(batch, 1024)](
+        _mtp_match_rows[(batch, self.union_scan // 32)](
             union_sources, union_counts, self.sources, self.counts, self.case.request_state,
-            self.union_matches, self.union_remaining, self.capacity, 4, 32768, True, pp, 32)
-        _mtp_commit_union[(batch, 4 * self.capacity)](
-            self.union_matches, union_slots, self.kv, self.rope, hbm_kv, hbm_rope,
-            hbm_table, self.capacity, 4, hbm_table.shape[1], self.union_scan)
+            self.union_matches, self.union_remaining, self.capacity, 4,
+            32768, self.union_scan, True, pp, 32)
+        _mtp_commit_union[(batch, 256)](
+            self.union_matches, union_slots, union_counts, self.case.request_state,
+            self.kv, self.rope, hbm_kv, hbm_rope,
+            hbm_table, self.capacity, 4, hbm_table.shape[1], 32768, self.union_scan)
         _mtp_match_rows[(queries, 64)](
             sources, misses, self.sources, self.counts, self.case.request_state,
-            self.matches, self.remaining, self.capacity, 4, 2048, False, pp, 32)
+            self.matches, self.remaining, self.capacity, 4, 2048, 2048, False, pp, 32)
         torch.cumsum(self.remaining, dim=1, dtype=torch.int32, out=self.prefix)
         torch.cumsum(self.union_remaining, dim=1, dtype=torch.int32, out=self.union_prefix)
         _mtp_partition[(queries, 16)](misses, self.remaining, self.prefix,
             self.permutation, out_misses, self.used, 2048, 128)
-        _mtp_partition[(batch, 256)](union_counts, self.union_remaining, self.union_prefix,
-            self.union_permutation, out_union_counts, self.union_used, 32768, 128)
+        _mtp_partition[(batch, self.union_scan // 128)](union_counts, self.union_remaining, self.union_prefix,
+            self.union_permutation, out_union_counts, self.union_used, self.union_scan, 128)
         out_sources.view(queries, 2048).scatter_(1, self.permutation, sources.view(queries, 2048))
         out_slots.view(queries, 2048).scatter_(1, self.permutation, slots.view(queries, 2048))
-        out_union_sources.scatter_(1, self.union_permutation, union_sources)
-        out_union_slots.scatter_(1, self.union_permutation, union_slots)
+        # Each permutation overwrites every scratch cell, including padding;
+        # no reset is needed. Keep scatter -> copy -> CopySFA on this stream,
+        # even at budget zero, since later replays may change device budgets.
+        self.union_sources_scratch.scatter_(
+            1, self.union_permutation, union_sources[:, :self.union_scan])
+        self.union_slots_scratch.scatter_(
+            1, self.union_permutation, union_slots[:, :self.union_scan])
+        _mtp_copy_union_outputs[(batch, 32768 // 1024)](
+            self.union_sources_scratch, self.union_slots_scratch,
+            union_sources, union_slots, out_union_sources, out_union_slots,
+            self.union_scan, 1024)
         return self.outputs

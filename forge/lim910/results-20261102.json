@@ -1,0 +1,1288 @@
+{
+  "date": "2026-11-02",
+  "device": "Ascend910_9391; ECHO_NPU_DEVICE=6 / ASCEND_RT_VISIBLE_DEVICES=6",
+  "base_echo_commit": "6462c41a76bbde25402266038966c4498e2961dc",
+  "forge_base_commit": "5030503d3ff71851aa34c14b9caf13ebfa9d9a78",
+  "forge_adapter_commit": "cc1ee52",
+  "measurements": [
+    {
+      "name": "original",
+      "local_artifact": "build/forge-lim/baseline-20261102/result.json",
+      "status": "completed_operator_chain_only",
+      "metrics": [
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "baseline",
+          "event_median_us": 775.6199836730957,
+          "event_mean_us": 776.962665716807,
+          "event_min_us": 772.379994392395,
+          "event_p90_us": 783.5999727249146,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": []
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "context-budget-0",
+          "event_median_us": 2976.560115814209,
+          "event_mean_us": 2975.6306489308677,
+          "event_min_us": 2964.1799926757812,
+          "event_p90_us": 2982.1200370788574,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "prefetch-64-history",
+          "event_median_us": 4668.819904327393,
+          "event_mean_us": 4667.043908437093,
+          "event_min_us": 4649.55997467041,
+          "event_p90_us": 4680.180072784424,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 4096,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 4096,
+              "unique_useful": 208
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "scripts/collect-echo-prefetch-profile-npu.py": "b95c41c9fc9f9e9e4dc9e03715df21f687dcbf1574d812baa79992413f8b2942",
+        "scripts/echo_indexer_prefetch.py": "8e784aa18d0405ef2b8bb4069a227926aeab071cedf0ce704a0de5d79f8360fd",
+        "patches/vllm-ascend-echo-indexer-prefetch.patch": "8a50d64e187b9551f45e610ee5474f30c34ee7cdbfc211d18d4e238189722423",
+        "scripts/echo_profile_workload.py": "e3a589acb314b234cbeb63232246c3aa0a9ec28b884324c02a0484d49b15738a"
+      }
+    },
+    {
+      "name": "union-width",
+      "local_artifact": "build/forge-lim/consumer-campaign-r1/iteration-01/eval/chain/result.json",
+      "status": "completed_operator_chain_only",
+      "metrics": [
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "baseline",
+          "event_median_us": 770.6400156021118,
+          "event_mean_us": 771.1813370386759,
+          "event_min_us": 766.3400173187256,
+          "event_p90_us": 775.65997838974,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": []
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "context-budget-0",
+          "event_median_us": 2094.5799350738525,
+          "event_mean_us": 2094.3453311920166,
+          "event_min_us": 2083.280086517334,
+          "event_p90_us": 2099.3399620056152,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "prefetch-64-history",
+          "event_median_us": 3777.31990814209,
+          "event_mean_us": 3777.3226579030356,
+          "event_min_us": 3761.3399028778076,
+          "event_p90_us": 3793.3599948883057,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 4096,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 4096,
+              "unique_useful": 208
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "scripts/collect-echo-prefetch-profile-npu.py": "b95c41c9fc9f9e9e4dc9e03715df21f687dcbf1574d812baa79992413f8b2942",
+        "scripts/echo_indexer_prefetch.py": "99d3def164605872293d4d518931275086fe2bba516248e42c3965bd26ee0246",
+        "patches/vllm-ascend-echo-indexer-prefetch.patch": "8a50d64e187b9551f45e610ee5474f30c34ee7cdbfc211d18d4e238189722423",
+        "scripts/echo_profile_workload.py": "e3a589acb314b234cbeb63232246c3aa0a9ec28b884324c02a0484d49b15738a"
+      }
+    },
+    {
+      "name": "direct-union-commit",
+      "local_artifact": "build/forge-lim/consumer-campaign-r1/iteration-02/eval/chain/result.json",
+      "status": "completed_operator_chain_only",
+      "metrics": [
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "baseline",
+          "event_median_us": 779.699981212616,
+          "event_mean_us": 779.5199990272522,
+          "event_min_us": 776.2799859046936,
+          "event_p90_us": 781.6200256347656,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": []
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "context-budget-0",
+          "event_median_us": 1975.2999544143677,
+          "event_mean_us": 1975.816003481547,
+          "event_min_us": 1967.8800106048584,
+          "event_p90_us": 1980.739951133728,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "prefetch-64-history",
+          "event_median_us": 3670.759916305542,
+          "event_mean_us": 3671.5813318888345,
+          "event_min_us": 3656.1601161956787,
+          "event_p90_us": 3682.039976119995,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 4096,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 4096,
+              "unique_useful": 208
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "scripts/collect-echo-prefetch-profile-npu.py": "b95c41c9fc9f9e9e4dc9e03715df21f687dcbf1574d812baa79992413f8b2942",
+        "scripts/echo_indexer_prefetch.py": "89115b94c297099c018691c19f6a42b358a23115b7b7337d0642fc61d1493422",
+        "patches/vllm-ascend-echo-indexer-prefetch.patch": "8a50d64e187b9551f45e610ee5474f30c34ee7cdbfc211d18d4e238189722423",
+        "scripts/echo_profile_workload.py": "e3a589acb314b234cbeb63232246c3aa0a9ec28b884324c02a0484d49b15738a"
+      }
+    },
+    {
+      "name": "vector-filter",
+      "local_artifact": "build/forge-lim/producer-campaign-r1/iteration-01/eval/chain/result.json",
+      "status": "completed_operator_chain_only",
+      "metrics": [
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "baseline",
+          "event_median_us": 781.6600203514099,
+          "event_mean_us": 781.9080034891764,
+          "event_min_us": 774.1400003433228,
+          "event_p90_us": 786.84002161026,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": []
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "context-budget-0",
+          "event_median_us": 1964.1000032424927,
+          "event_mean_us": 1964.0413284301758,
+          "event_min_us": 1957.8399658203125,
+          "event_p90_us": 1970.7599878311157,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "prefetch-64-history",
+          "event_median_us": 2290.179967880249,
+          "event_mean_us": 2290.8599853515625,
+          "event_min_us": 2273.859977722168,
+          "event_p90_us": 2298.7799644470215,
+          "replays": 15,
+          "independent_attention_reference": false,
+          "prefetched_tokens": 4096,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 4096,
+              "unique_useful": 208
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "scripts/collect-echo-prefetch-profile-npu.py": "b95c41c9fc9f9e9e4dc9e03715df21f687dcbf1574d812baa79992413f8b2942",
+        "scripts/echo_indexer_prefetch.py": "89115b94c297099c018691c19f6a42b358a23115b7b7337d0642fc61d1493422",
+        "patches/vllm-ascend-echo-indexer-prefetch.patch": "8a50d64e187b9551f45e610ee5474f30c34ee7cdbfc211d18d4e238189722423",
+        "scripts/echo_profile_workload.py": "e3a589acb314b234cbeb63232246c3aa0a9ec28b884324c02a0484d49b15738a"
+      }
+    },
+    {
+      "name": "narrow-output-scatter",
+      "local_artifact": "build/forge-lim/consumer-campaign-r2/iteration-01/eval/chain/result.json",
+      "status": "completed_operator_chain_only",
+      "metrics": [
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "baseline",
+          "event_median_us": 772.5200057029724,
+          "event_mean_us": 772.3106662432352,
+          "event_min_us": 768.2600021362305,
+          "event_p90_us": 774.1600275039673,
+          "replays": 15,
+          "stages": {
+            "lim_us": 488.8355,
+            "consumer_kernel_sum_us": 0,
+            "consumer_kernel_calls": 0,
+            "copy_sfa_us": 276.41949999999997,
+            "lim_to_sfa_span_us": 768.5,
+            "profile_chain_calls": 4,
+            "target_kernel_sum_us": 765.255
+          },
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": []
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "context-budget-0",
+          "event_median_us": 1738.81995677948,
+          "event_mean_us": 1737.4599854151409,
+          "event_min_us": 1726.4800071716309,
+          "event_p90_us": 1741.5800094604492,
+          "replays": 15,
+          "stages": {
+            "lim_us": 509.315,
+            "consumer_kernel_sum_us": 898.2372500000001,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 307.36400000000003,
+            "lim_to_sfa_span_us": 1725.875,
+            "profile_chain_calls": 4,
+            "target_kernel_sum_us": 1714.9162500000002
+          },
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "prefetch-64-history",
+          "event_median_us": 2058.4399700164795,
+          "event_mean_us": 2060.0199858347573,
+          "event_min_us": 2048.3999252319336,
+          "event_p90_us": 2064.539909362793,
+          "replays": 15,
+          "stages": {
+            "lim_us": 833.428,
+            "consumer_kernel_sum_us": 917.1220000000001,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 289.27425,
+            "lim_to_sfa_span_us": 2051.125,
+            "profile_chain_calls": 4,
+            "target_kernel_sum_us": 2039.8242500000001
+          },
+          "independent_attention_reference": false,
+          "prefetched_tokens": 4096,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 4096,
+              "unique_useful": 208
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "scripts/collect-echo-prefetch-profile-npu.py": "b95c41c9fc9f9e9e4dc9e03715df21f687dcbf1574d812baa79992413f8b2942",
+        "scripts/echo_indexer_prefetch.py": "efdb5488bc0794a553a00429668040a40b3c451415f15e13c834d0b4aeac4ee2",
+        "patches/vllm-ascend-echo-indexer-prefetch.patch": "8a50d64e187b9551f45e610ee5474f30c34ee7cdbfc211d18d4e238189722423",
+        "scripts/echo_profile_workload.py": "e3a589acb314b234cbeb63232246c3aa0a9ec28b884324c02a0484d49b15738a"
+      }
+    },
+    {
+      "name": "global-binary-search-rejected",
+      "local_artifact": "build/forge-lim/consumer-campaign-r2/iteration-02/eval/chain/result.json",
+      "status": "completed_operator_chain_only",
+      "metrics": [
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "baseline",
+          "event_median_us": 772.7800011634827,
+          "event_mean_us": 773.2626676559448,
+          "event_min_us": 763.9600038528442,
+          "event_p90_us": 778.0600190162659,
+          "replays": 15,
+          "stages": {
+            "lim_us": 491.42525,
+            "consumer_kernel_sum_us": 0,
+            "consumer_kernel_calls": 0,
+            "copy_sfa_us": 274.7095,
+            "lim_to_sfa_span_us": 769.0,
+            "profile_chain_calls": 4,
+            "target_kernel_sum_us": 766.1347499999999
+          },
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": []
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "context-budget-0",
+          "event_median_us": 4238.900184631348,
+          "event_mean_us": 4239.042663574219,
+          "event_min_us": 4197.879791259766,
+          "event_p90_us": 4281.020164489746,
+          "replays": 15,
+          "stages": {
+            "lim_us": 507.28975,
+            "consumer_kernel_sum_us": 3370.4025,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 313.95875,
+            "lim_to_sfa_span_us": 4202.25,
+            "profile_chain_calls": 4,
+            "target_kernel_sum_us": 4191.651
+          },
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "prefetch-64-history",
+          "event_median_us": 4575.980186462402,
+          "event_mean_us": 4580.138651529948,
+          "event_min_us": 4547.619819641113,
+          "event_p90_us": 4611.2799644470215,
+          "replays": 15,
+          "stages": {
+            "lim_us": 830.4035,
+            "consumer_kernel_sum_us": 3428.27125,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 298.97925,
+            "lim_to_sfa_span_us": 4568.8125,
+            "profile_chain_calls": 4,
+            "target_kernel_sum_us": 4557.654
+          },
+          "independent_attention_reference": false,
+          "prefetched_tokens": 4096,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 4096,
+              "unique_useful": 208
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "scripts/collect-echo-prefetch-profile-npu.py": "b95c41c9fc9f9e9e4dc9e03715df21f687dcbf1574d812baa79992413f8b2942",
+        "scripts/echo_indexer_prefetch.py": "cd1e6214c4a19dc4cf51664c488888e3547df35025bd8faf93b0e375379790df",
+        "patches/vllm-ascend-echo-indexer-prefetch.patch": "8a50d64e187b9551f45e610ee5474f30c34ee7cdbfc211d18d4e238189722423",
+        "scripts/echo_profile_workload.py": "e3a589acb314b234cbeb63232246c3aa0a9ec28b884324c02a0484d49b15738a"
+      }
+    },
+    {
+      "name": "batched-host-dma",
+      "local_artifact": "build/forge-lim/producer-campaign-r2/iteration-01/eval/chain/result.json",
+      "status": "completed_operator_chain_only",
+      "metrics": [
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "baseline",
+          "event_median_us": 762.499988079071,
+          "event_mean_us": 764.6493355433146,
+          "event_min_us": 759.1599822044373,
+          "event_p90_us": 770.3800201416016,
+          "replays": 15,
+          "stages": {
+            "lim_us": 480.4305,
+            "consumer_kernel_sum_us": 0,
+            "consumer_kernel_calls": 0,
+            "copy_sfa_us": 276.35974999999996,
+            "lim_to_sfa_span_us": 759.6875,
+            "profile_chain_calls": 4,
+            "target_kernel_sum_us": 756.79025
+          },
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": []
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "context-budget-0",
+          "event_median_us": 1730.9999465942383,
+          "event_mean_us": 1732.263994216919,
+          "event_min_us": 1722.9399681091309,
+          "event_p90_us": 1740.7000064849854,
+          "replays": 15,
+          "stages": {
+            "lim_us": 499.53499999999997,
+            "consumer_kernel_sum_us": 893.9275,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 306.964,
+            "lim_to_sfa_span_us": 1711.5,
+            "profile_chain_calls": 4,
+            "target_kernel_sum_us": 1700.4265
+          },
+          "independent_attention_reference": false,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "prefetch-64-history",
+          "event_median_us": 1928.5800457000732,
+          "event_mean_us": 1926.090669631958,
+          "event_min_us": 1913.3199453353882,
+          "event_p90_us": 1933.9200258255005,
+          "replays": 15,
+          "stages": {
+            "lim_us": 691.6510000000001,
+            "consumer_kernel_sum_us": 915.8567499999999,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 286.484,
+            "lim_to_sfa_span_us": 1905.1875,
+            "profile_chain_calls": 4,
+            "target_kernel_sum_us": 1893.99175
+          },
+          "independent_attention_reference": false,
+          "prefetched_tokens": 4096,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 4096,
+              "unique_useful": 208
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "scripts/collect-echo-prefetch-profile-npu.py": "b95c41c9fc9f9e9e4dc9e03715df21f687dcbf1574d812baa79992413f8b2942",
+        "scripts/echo_indexer_prefetch.py": "efdb5488bc0794a553a00429668040a40b3c451415f15e13c834d0b4aeac4ee2",
+        "patches/vllm-ascend-echo-indexer-prefetch.patch": "8a50d64e187b9551f45e610ee5474f30c34ee7cdbfc211d18d4e238189722423",
+        "scripts/echo_profile_workload.py": "e3a589acb314b234cbeb63232246c3aa0a9ec28b884324c02a0484d49b15738a"
+      }
+    },
+    {
+      "name": "final-b16",
+      "local_artifact": "build/forge-lim/final-b16/chain/result.json",
+      "status": "completed_operator_chain_only",
+      "metrics": [
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "baseline",
+          "event_median_us": 768.5999870300293,
+          "event_mean_us": 768.9634993672371,
+          "event_min_us": 763.8999819755554,
+          "event_p90_us": 772.7400064468384,
+          "replays": 40,
+          "stages": {
+            "lim_us": 481.97333333333336,
+            "consumer_kernel_sum_us": 0,
+            "consumer_kernel_calls": 0,
+            "copy_sfa_us": 279.1245,
+            "lim_to_sfa_span_us": 763.9166666666666,
+            "profile_chain_calls": 6,
+            "target_kernel_sum_us": 761.0978333333334
+          },
+          "independent_attention_reference": true,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": []
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "context-budget-0",
+          "event_median_us": 1756.9500207901,
+          "event_mean_us": 1757.125997543335,
+          "event_min_us": 1747.6999759674072,
+          "event_p90_us": 1762.6999616622925,
+          "replays": 40,
+          "stages": {
+            "lim_us": 507.4365,
+            "consumer_kernel_sum_us": 917.9183333333333,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 308.194,
+            "lim_to_sfa_span_us": 1744.6666666666667,
+            "profile_chain_calls": 6,
+            "target_kernel_sum_us": 1733.5488333333333
+          },
+          "independent_attention_reference": true,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        },
+        {
+          "batch": 16,
+          "mtp": 3,
+          "mode": "prefetch-64-history",
+          "event_median_us": 1953.0799984931946,
+          "event_mean_us": 1952.75599360466,
+          "event_min_us": 1945.2799558639526,
+          "event_p90_us": 1959.2599868774414,
+          "replays": 40,
+          "stages": {
+            "lim_us": 694.8828333333333,
+            "consumer_kernel_sum_us": 944.1476666666666,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 288.2175,
+            "lim_to_sfa_span_us": 1938.5416666666667,
+            "profile_chain_calls": 6,
+            "target_kernel_sum_us": 1927.2479999999998
+          },
+          "independent_attention_reference": true,
+          "prefetched_tokens": 4096,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 4096,
+              "unique_useful": 208
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 448,
+              "unique_useful": 15
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 4096,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 3840,
+              "unique_useful": 2
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 4096,
+              "unique_useful": 7
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "scripts/collect-echo-prefetch-profile-npu.py": "b95c41c9fc9f9e9e4dc9e03715df21f687dcbf1574d812baa79992413f8b2942",
+        "scripts/echo_indexer_prefetch.py": "efdb5488bc0794a553a00429668040a40b3c451415f15e13c834d0b4aeac4ee2",
+        "patches/vllm-ascend-echo-indexer-prefetch.patch": "8a50d64e187b9551f45e610ee5474f30c34ee7cdbfc211d18d4e238189722423",
+        "scripts/echo_profile_workload.py": "e3a589acb314b234cbeb63232246c3aa0a9ec28b884324c02a0484d49b15738a"
+      }
+    },
+    {
+      "name": "final-b24-all-hit",
+      "local_artifact": "build/forge-lim/final-b24-all-hit/result.json",
+      "status": "completed_operator_chain_only",
+      "metrics": [
+        {
+          "batch": 24,
+          "mtp": 3,
+          "mode": "baseline",
+          "event_median_us": 913.9299988746643,
+          "event_mean_us": 914.615997672081,
+          "event_min_us": 905.0400257110596,
+          "event_p90_us": 919.48002576828,
+          "replays": 40,
+          "stages": {
+            "lim_us": 526.4461666666667,
+            "consumer_kernel_sum_us": 0,
+            "consumer_kernel_calls": 0,
+            "copy_sfa_us": 377.1725,
+            "lim_to_sfa_span_us": 906.375,
+            "profile_chain_calls": 6,
+            "target_kernel_sum_us": 903.6186666666667
+          },
+          "independent_attention_reference": true,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": []
+        },
+        {
+          "batch": 24,
+          "mtp": 3,
+          "mode": "context-budget-0",
+          "event_median_us": 1608.3199977874756,
+          "event_mean_us": 1609.0660005807877,
+          "event_min_us": 1594.43998336792,
+          "event_p90_us": 1617.460012435913,
+          "replays": 40,
+          "stages": {
+            "lim_us": 559.072,
+            "consumer_kernel_sum_us": 624.5475,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 400.6053333333333,
+            "lim_to_sfa_span_us": 1595.375,
+            "profile_chain_calls": 6,
+            "target_kernel_sum_us": 1584.2248333333332
+          },
+          "independent_attention_reference": true,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 672,
+              "unique_useful": 23
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 6144,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 5888,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 6144,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        },
+        {
+          "batch": 24,
+          "mtp": 3,
+          "mode": "prefetch-64-history",
+          "event_median_us": 1772.92001247406,
+          "event_mean_us": 1773.4420001506805,
+          "event_min_us": 1762.719988822937,
+          "event_p90_us": 1780.1200151443481,
+          "replays": 40,
+          "stages": {
+            "lim_us": 723.486,
+            "consumer_kernel_sum_us": 624.5236666666667,
+            "consumer_kernel_calls": 20,
+            "copy_sfa_us": 401.832,
+            "lim_to_sfa_span_us": 1760.75,
+            "profile_chain_calls": 6,
+            "target_kernel_sum_us": 1749.8416666666667
+          },
+          "independent_attention_reference": true,
+          "prefetched_tokens": 0,
+          "dynamic_scenarios": [
+            {
+              "scenario": "changed-query",
+              "copied": 6144,
+              "unique_useful": 314
+            },
+            {
+              "scenario": "shorter-length-budget-7",
+              "copied": 672,
+              "unique_useful": 23
+            },
+            {
+              "scenario": "zero-budget",
+              "copied": 0,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "duplicate-candidates-across-routes",
+              "copied": 6144,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "mixed-first-fill",
+              "copied": 5888,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "steady-again",
+              "copied": 6144,
+              "unique_useful": 0
+            },
+            {
+              "scenario": "persistent-all-hit",
+              "remaining_misses": 0
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "scripts/collect-echo-prefetch-profile-npu.py": "b95c41c9fc9f9e9e4dc9e03715df21f687dcbf1574d812baa79992413f8b2942",
+        "scripts/echo_indexer_prefetch.py": "efdb5488bc0794a553a00429668040a40b3c451415f15e13c834d0b4aeac4ee2",
+        "patches/vllm-ascend-echo-indexer-prefetch.patch": "8a50d64e187b9551f45e610ee5474f30c34ee7cdbfc211d18d4e238189722423",
+        "scripts/echo_profile_workload.py": "e3a589acb314b234cbeb63232246c3aa0a9ec28b884324c02a0484d49b15738a"
+      }
+    }
+  ],
+  "final_eval": {
+    "correctness": {
+      "pass": true,
+      "dynamic_scenarios": 14,
+      "oracle": "exact original LIM outputs and complete KV/KPE; attention rtol .02 atol .002"
+    },
+    "performance": {
+      "device_median_ms": 1.9530799984931946,
+      "ref_device_ms": 0.7685999870300293,
+      "vs_ref_device": 0.3935322606462643,
+      "device_window_basis": "npu_graph",
+      "budget_zero_median_ms": 1.7569500207901
+    },
+    "native_source_sha256": "0a46dd592ea90f987684428b9fd0932fd2ee713edcd9b06edfaecec8aba6be0e",
+    "installed_binary_sha256": {
+      "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_3ab77f361fbee6ce06ad3c6a88651550.o": "168066c21d078ee58e5e679929fd539cf20ea22c75a00b61014828c32bf94d11",
+      "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_3ab77f361fbee6ce06ad3c6a88651550_relocatable.o": "bf607a6e6c783c1c2972b0e50d7d5cd0cdadeb67fc8de80a0c40916a64af5998",
+      "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_49b4a6827615c395fa34fea50d712121.o": "da874270798585525b6e2e81e63c5d8d3083383a5bd2ccabcf13b447027e8b09",
+      "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_49b4a6827615c395fa34fea50d712121_relocatable.o": "4727a99f9a6254011fb1bc497ad499e4fbacc4776628b2b76f283c7c98a4a489",
+      "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_639404fdb328180eee25b9923c9cd61a.o": "71504acded226a04b4ab52dd9de66989bd033c0876847b457a4d635eda759d49",
+      "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_639404fdb328180eee25b9923c9cd61a_relocatable.o": "210496f60e9482ab22ab21ea6a5ca50d0afa3c56b3741161bc394616c97c5b18",
+      "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_96df93e2a3a26c19c6bb6f0e8728b4a4.o": "6701c1589d216b82b22eeca3d9ef3c7d2cfa02fe8180a973d8367603531d9f59",
+      "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_96df93e2a3a26c19c6bb6f0e8728b4a4_relocatable.o": "7c93fb5374200a6ac4f984b3f73217829db7976adfd8e24ef44b5347a0b0939a"
+    },
+    "consumer_source_sha256": "efdb5488bc0794a553a00429668040a40b3c451415f15e13c834d0b4aeac4ee2",
+    "scope": "B16 Q4 L40960 C8192 request-union miss400; fixed synthetic queries, one device; whole Graph"
+  },
+  "not_implemented": {
+    "inverse_partition_gather": "int32 gather unsupported by installed frontend; full-width live-set feasibility unresolved; no measured result"
+  },
+  "validation": {
+    "environment_smoke": "tiny Qwen2 B1/B2/B1 NPU Graph pass",
+    "single_query_boundary_checker": "B1/B2 11 changing or persistent scenarios each passed",
+    "native_filter_regression": "40 replays, Q4, INT_MIN/-1, strict threshold, partial tails, exact source IDs and Host payloads; passed after batching",
+    "forge_tests": "165 relevant tests passed; broad upstream suite interrupted after292 passes"
+  },
+  "original_installed_binary_sha256": {
+    "vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_639404fdb328180eee25b9923c9cd61a.o": "cfa1e10edf6be3973e146be7a2709523fb856185908fe303cd93d940a01bf03c",
+    "vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_96df93e2a3a26c19c6bb6f0e8728b4a4.o": "452c9f22dc1d9618f4bea8d4d9937ad0dca9f4c29bc01c4adbec35db1eed2cdb",
+    "vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_96df93e2a3a26c19c6bb6f0e8728b4a4_relocatable.o": "c376b6106c132246f006c170d835d1049911d6875048e231c2f8adbbad2946a8",
+    "vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_639404fdb328180eee25b9923c9cd61a_relocatable.o": "e62fc3abbba301e8c85c5efbd6923753a203f7af9e227d957e48152664ef74a6",
+    "vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_3ab77f361fbee6ce06ad3c6a88651550.o": "bb7db577dfc683814bc564f44cd038d9a88514159b9122b9c277dec29935d894",
+    "vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_49b4a6827615c395fa34fea50d712121_relocatable.o": "52ddab037d421a07f34bb1a3e143490b1dc7f73cbf39532d2c5e8894ab7d4370",
+    "vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_49b4a6827615c395fa34fea50d712121.o": "2809838799d38405af869ec57fa1600d3f77c08821d058578e829c24fc8c2b9c",
+    "vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_3ab77f361fbee6ce06ad3c6a88651550_relocatable.o": "8e2f1ed318c21fd93a672802540e33b065696cb03fab23b9b43789376eeeee74"
+  }
+}

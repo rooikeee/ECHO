@@ -1,0 +1,24 @@
+{
+  "workspace": "/home/l50066329/code/ECHO-lim-echo-forge",
+  "description": "forge/lim910/description.md",
+  "editable_files": [
+    "vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/echo_indexer_prefetch.h"
+  ],
+  "evaluate": [
+    "python3",
+    "scripts/forge-lim-eval.py",
+    "--output",
+    "{output}",
+    "--device",
+    "6"
+  ],
+  "baseline_result": "build/forge-lim/consumer-campaign-r1/iteration-02/eval/eval.json",
+  "rounds": 1,
+  "minimum_gain": 0.015,
+  "plateau_window": 3,
+  "agent_timeout_s": 900,
+  "eval_timeout_s": 1800,
+  "iteration_guidance": [
+    "Vectorize only the producer candidate filter in EchoPrefetch::Run. Current per-token scoreUb.GetValue and GM slots.GetValue are slow. DMA a tile of slots into UB, CompareScalar(scores, threshold, GT), ShiftRight unsigned slot sign then CompareScalar EQ1 (signed INT_MIN comparison is unsafe on C220); combine masks, GatherMask compact local source IDs, iterate only passing candidates for existing real Host DMA. Preserve ascending first-budget candidate identity and every readiness, fence, valid-length, host-table check. Match existing tested C220 patterns in fused_lightning_indexer_manage_union.h lines 1480-1525, 1740-1840, 2390-2430. Explicitly initialize/mask partial vector tails (64-lane alignment); initialize progression once outside tile loop if needed (existing comment about variable repeat progression hazards). UB is reset before Run, but derive bound from tile size and available UB. No double-buffer DMA changes in this round. Limit reading to header, its caller and these known patterns; avoid broad repo scans. The consumer is already optimized and frozen. Output a focused plan then implement; the runner compiles and validates, not you."
+  ]
+}

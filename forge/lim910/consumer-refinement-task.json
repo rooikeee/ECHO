@@ -1,0 +1,27 @@
+{
+  "workspace": "/home/l50066329/code/ECHO-lim-echo-forge",
+  "description": "forge/lim910/description.md",
+  "editable_files": [
+    "scripts/echo_indexer_prefetch.py"
+  ],
+  "evaluate": [
+    "python3",
+    "scripts/forge-lim-eval.py",
+    "--output",
+    "{output}",
+    "--device",
+    "6",
+    "--profile-repeats",
+    "3"
+  ],
+  "baseline_result": "build/forge-lim/producer-campaign-r1/iteration-01/eval/eval.json",
+  "rounds": 2,
+  "minimum_gain": 0.015,
+  "plateau_window": 3,
+  "agent_timeout_s": 900,
+  "eval_timeout_s": 1800,
+  "iteration_guidance": [
+    "Profiler measured consumer after accepted D1/D2: 19 kernels, about1170us total. Union torch scatter into full [B,32768] destination each takes240us although input/index width8192, while query scatter width2048 takes65us each. Optimize only union output scatter: allocate fixed narrow [B,union_scan] source/slot output scratch, scatter both into narrow targets, then copy the full valid scratch prefix back into existing fullwidth ABI outputs via graph-safe contiguous/simple strided copy. Keep every possible valid entry including first-fill entire hotpool, stablepartition, same externaltensoraddresses. Time complete added copies and buffers; allpadcells overwritten. Prefer a simple Triton kernel with contiguous tile stores into full-width prefix or Torch copy_ if clear. No native signature changes; no testchanges. Limit reads to implementation and this profiler; no broad repo scans. Native producer vector filter accepted, frozen.",
+    "Optimize _mtp_match_rows dense [BLOCK,256] candidate equality. Native producer emits ascending unique sourceIDs within each query row, including vectorfilter orderedGatherMask. All four routes contribute sorted bounded lists, each with device count<=64. Explore 7-step lower_bound binarysearch into each of four lists in parallel per source; use dynamic pointer tl.load (not scatter), then take lowest matching pooledcandidateID. Counts0, changingbudgets, invalid paddedsource, crossroute duplicate candidates, firstfillmustpreserve current semantics. Handle length64 requiring7steps and masked mid==count to avoid crossrow invalidread. Both union and query paths share lookup. If source-order invariant cannot be proven from currentproducer, do not implement binarysearch; choose bounded blocksize tuning. Keep fixedoutputs, exact dynamictest oracle and no host-value decisions. Focus this bounded optimization only; do not add scans orTriton scatter."
+  ]
+}

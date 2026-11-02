@@ -1,0 +1,4 @@
+Repository: https://github.com/OpenBMB/ForgeKernel
+Base: 5030503d3ff71851aa34c14b9caf13ebfa9d9a78
+Adapter commit: cc1ee52
+Apply on the base with: git apply --unidiff-zero forgekernel-ascend-adapter.patch

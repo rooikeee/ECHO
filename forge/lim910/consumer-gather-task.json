@@ -1,0 +1,26 @@
+{
+  "workspace": "/home/l50066329/code/ECHO-lim-echo-forge",
+  "description": "forge/lim910/description.md",
+  "editable_files": [
+    "scripts/echo_indexer_prefetch.py"
+  ],
+  "evaluate": [
+    "python3",
+    "scripts/forge-lim-eval.py",
+    "--output",
+    "{output}",
+    "--device",
+    "6",
+    "--profile-repeats",
+    "3"
+  ],
+  "baseline_result": "build/forge-lim/producer-campaign-r2/iteration-01/eval/eval.json",
+  "rounds": 1,
+  "minimum_gain": 0.015,
+  "plateau_window": 3,
+  "agent_timeout_s": 900,
+  "eval_timeout_s": 1800,
+  "iteration_guidance": [
+    "One bounded bundle: replace partition+four native scatter outputs with inverse stable-partition gathers using the existing remaining masks and native torch.cumsum prefixes. IMPORTANT prior candidate binarysearch with seven dependent *GM* tl.load probes made fullchain2.06ms ->4.58ms and was reverted. Do NOT repeat GM-per-iteration search. Instead consider one program per row: load full prefix [WIDTH] into local vector once, maintain [WIDTH] output destination and lower/upper bounds, use tl.gather(prefix, mid, axis=0) to probe the in-register/UB prefix during fixedlog2(WIDTH) search. Shapesmustsatisfytl.gather restrictions; no tl.cumsum/discrete scatter store due knownGLOBALcapturelocks. Check local AscendTriton gather examples/compiler constraints before committing design; actualNPUGraphvalidation mandatory. WIDTH2048 query and8192 union, bufferfitsUB? calculatefull live set andcompilermemory. Preserve fixedrawABIunion32768 via separate contiguoustailcopy ifneeded. Rows r==n (allmissremain), r==0 and n==0 are identity permutation, allowing a device branch copying raw source/slot directly withoutsearch (allmatched alsoidentitywithinmissprefix). Otherrows: d>=n identity, d<r findfirst i s.t.prefix[i]>=d+1; r<=d<n findfirst i s.t.i+1-prefix[i]>=d-r+1. Searchrestricted[0,n), proper clamped index andactivevalidmask, rankmonotonic. Rawsource/slot finalgather can use loaded whole vectors via tl.gather too, then all storescontiguous. Counts andusedwrittenonce. Eliminate native scatteroperations, narrow output scratchandcopy, oldpermutationcreation ifunused; retain both nativecumsumout= and matching/unioncommit exactly. Nochange outputsvalidprefix/rawLIM, preservedstableorder/firstfill8192, MTPonceperunion, registeredHostwork/budget64. Withallhit/budget0 rows identitypath thiscouldreducefixedconsumeoverhead. ValidatecacheKV/all14dynamics andattention, arraysaddresses. If tl.gather lowershostlocks orUBtoo large, rejectwithout unsafe workaround. Frozen source only scripts/echo_indexer_prefetch.py. Scopeonebundle andlimitedreads; no modelenv orvalidationchanges. Allowfloat64? no useint32. The no-prefetchreference ~.78ms andlatestprefetchrecordinsummaryisnotbeatenyet.\n"
+  ]
+}

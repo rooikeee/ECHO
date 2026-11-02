@@ -1,0 +1,516 @@
+diff --git a/README.md b/README.md
+index b909167..ca038c1 100644
+--- a/README.md
++++ b/README.md
+@@ -70,0 +71,6 @@ Show me the plan it prints.
++## Experimental Ascend adapter in this branch
++
++See [the adapter notes](docs/ascend-experimental.md) for the local ECHO 910
++LIM experiment using Codex CLI and a frozen NPU Graph evaluator. This adapter
++is separate from the upstream CUDA workflow documented below.
++
+diff --git a/docs/ascend-experimental.md b/docs/ascend-experimental.md
+new file mode 100644
+index 0000000..a88fe0c
+--- /dev/null
++++ b/docs/ascend-experimental.md
+@@ -0,0 +1,46 @@
++# Experimental Ascend campaign adapter
++
++This branch adds `forge ascend TASK.json --output RUN_DIR` for the ECHO 910 LIM
++experiment. It is a small adapter, not upstream Ascend support. It reuses
++ForgeKernel's agent-turn and evaluator parsing, trajectory records, digest,
++performance gate, and plateau detection. An architecture turn proposes one
++change; a coding turn edits an explicit allowlist; the frozen project evaluator
++compiles and checks it on NPU Graph. Failed or slower candidates are restored.
++
++The agent backend is the authenticated `codex exec` CLI. Its existing model and
++credentials are used without overrides. The architect uses read-only mode and
++the student uses workspace-write mode. Both prompts prohibit device jobs; the
++runner serializes evaluation. CUDA NCU/SASS skills, automatic knowledge-base
++harvesting, and the full upstream teacher/meta curriculum are not implemented.
++
++Run from this checkout without changing the upstream Python installation:
++
++```bash
++PYTHONPATH=src python3 -m forgekernel ascend /path/to/task.json --output /path/to/new-run
++```
++
++A task describes the workspace, description file, editable implementation files,
++and an evaluator command with a `{output}` placeholder. The evaluator must print
++ForgeKernel's `=== JSON ===` record with correctness and device median in ms.
++The ECHO example lives in its checkout at `forge/lim910/consumer-task.json` and
++`producer-task.json`. Paths in that local experiment must be adapted when moved.
++
++By default a candidate must pass correctness and beat the last accepted device
++median by 1.5%. The no-prefetch reference is measured in the same evaluator job
++and recorded separately: beating the old prefetch implementation does **not**
++mean beating no prefetch. This experiment times a synthetic target-verification
++operator chain, not a full model or complete speculative round.
++
++Every run preserves the task, prompts, agent logs, source snapshots, patches,
++evaluator logs, `status.jsonl`, and a summary. Only allowlisted source files are
++restored; the evaluator is responsible for rebuilding a restored source before
++running it again. The ECHO evaluator hashes native headers for that purpose.
++Frozen tracked and unignored files detect accidental edits outside the allowlist.
++This is a post-turn scope check, not a security boundary against malicious agents.
++Use a separate clean worktree with an isolated copied native operator package.
++
++Validation of the adapter itself:
++
++```bash
++python -m pytest -q tests/test_ascend_adapter.py
++```
+diff --git a/src/forgekernel/__main__.py b/src/forgekernel/__main__.py
+index 2650846..ce6880a 100644
+--- a/src/forgekernel/__main__.py
++++ b/src/forgekernel/__main__.py
+@@ -2,0 +3 @@
++  forge ascend TASK.json --output DIR -> experimental Ascend/Codex campaign
+@@ -52,0 +54,5 @@ def main(argv: list[str] | None = None) -> int:
++    if argv and argv[0] == "ascend":
++        from forgekernel.ascend import main as ascend_main
++
++        return ascend_main(argv[1:])
++
+diff --git a/src/forgekernel/ascend.py b/src/forgekernel/ascend.py
+new file mode 100644
+index 0000000..59f9f48
+--- /dev/null
++++ b/src/forgekernel/ascend.py
+@@ -0,0 +1,364 @@
++"""Experimental Ascend campaign: Codex CLI + a frozen project NPU evaluator.
++
++Reuses ForgeKernel's turn/eval parsing, trajectory, timing gate and plateau
++logic. This bounded adapter does not claim support for CUDA-specific NCU/SASS
++skills or automatic hardware-KB harvesting. No model/credential override.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import math
++import os
++import signal
++import subprocess
++from pathlib import Path
++
++from forgekernel.inner.trajectory import (
++    IterationRecord,
++    append_record,
++    build_digest,
++    gate_ms,
++    load_records,
++)
++from forgekernel.loop.parse import (
++    Exhausted,
++    Record,
++    detect_plateau,
++    parse_eval,
++    parse_student_turn,
++)
++
++
++def source_digest(workspace: Path, files: list[str]) -> str:
++    digest = hashlib.sha256()
++    for name in sorted(files):
++        digest.update(name.encode() + b"\0")
++        digest.update((workspace / name).read_bytes())
++    return digest.hexdigest()
++
++
++def candidate_allowed(changed: set[str], allowed: set[str]) -> bool:
++    return bool(changed) and changed <= allowed
++
++
++def assess(log: str, previous_ms: float, minimum_gain: float) -> tuple[bool, object]:
++    result = parse_eval(log)
++    elapsed = gate_ms(result, "device")
++    keep = (
++        result.correctness
++        and elapsed is not None
++        and math.isfinite(elapsed)
++        and elapsed > 0
++        and elapsed < previous_ms * (1 - minimum_gain)
++    )
++    return bool(keep), result
++
++
++def run_process(argv, *, cwd, log, timeout, input_text=None):
++    """Keep the entire subprocess group bounded; never cancel unrelated jobs."""
++    with Path(log).open("w") as output:
++        process = subprocess.Popen(
++            argv,
++            cwd=cwd,
++            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
++            stdout=output,
++            stderr=subprocess.STDOUT,
++            text=True,
++            start_new_session=True,
++        )
++        try:
++            process.communicate(input=input_text, timeout=timeout)
++        except subprocess.TimeoutExpired:
++            os.killpg(process.pid, signal.SIGTERM)
++            try:
++                process.wait(timeout=10)
++            except subprocess.TimeoutExpired:
++                os.killpg(process.pid, signal.SIGKILL)
++                process.wait()
++            raise RuntimeError(f"Timed out; see {log}")
++    return process.returncode
++
++
++def agent(workspace, output_dir, role, prompt, timeout):
++    reply = output_dir / f"{role}.txt"
++    log = output_dir / f"{role}.log"
++    (output_dir / f"{role}-prompt.txt").write_text(prompt)
++    argv = [
++        "codex",
++        "exec",
++        "--ephemeral",
++        "--sandbox",
++        "read-only" if role == "architect" else "workspace-write",
++        "--color",
++        "never",
++        "--output-last-message",
++        str(reply),
++        "-",
++    ]
++    rc = run_process(argv, cwd=workspace, log=log, timeout=timeout, input_text=prompt)
++    if rc or not reply.is_file():
++        raise RuntimeError(f"{role} agent failed rc={rc}; see {log}")
++    return reply.read_text()
++
++
++def evaluate(config, output):
++    command = [str(x).replace("{output}", str(output)) for x in config["evaluate"]]
++    log = output.parent / (output.name + ".log")
++    rc = run_process(
++        command,
++        cwd=config["workspace"],
++        log=log,
++        timeout=config.get("eval_timeout_s", 900),
++    )
++    text = log.read_text()
++    if rc:
++        return (
++            text
++            + "\n=== JSON ===\n"
++            + json.dumps(
++                {
++                    "correctness": {"pass": False, "error": f"evaluator rc={rc}"},
++                    "performance": {},
++                }
++            )
++        )
++    return text
++
++
++def tracked_fingerprints(workspace):
++    """Freeze tracked and unignored files, including tests, before a turn."""
++    names = (
++        subprocess.check_output(
++            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
++            cwd=workspace,
++        )
++        .decode()
++        .split("\0")
++    )
++    return {
++        name: hashlib.sha256((workspace / name).read_bytes()).hexdigest()
++        for name in names
++        if name and (workspace / name).is_file() and not (workspace / name).is_symlink()
++    }
++
++
++def run(config_path: Path, output: Path, rounds_override=None):
++    config = json.loads(config_path.read_text())
++    workspace = Path(config["workspace"]).resolve()
++    config["workspace"] = str(workspace)
++    allowed = config["editable_files"]
++    for name in allowed:
++        path = (workspace / name).resolve()
++        if not path.is_relative_to(workspace) or not path.is_file():
++            raise ValueError(f"Invalid editable path: {name}")
++    rounds = rounds_override if rounds_override is not None else config.get("rounds", 3)
++    minimum_gain = config.get("minimum_gain", 0.015)
++    if rounds < 1 or not 0 <= minimum_gain < 1:
++        raise ValueError("rounds must be positive and minimum_gain must be in [0, 1)")
++    output = output.resolve()
++    output.mkdir(parents=True, exist_ok=False)
++    (output / "task.json").write_text(json.dumps(config, indent=2) + "\n")
++    trajectory = output / "status.jsonl"
++    description = (workspace / config["description"]).read_text()
++    baseline_path = config.get("baseline_result")
++    if baseline_path:
++        raw = json.loads((workspace / baseline_path).read_text())
++        baseline_log = json.dumps(raw)
++    else:
++        baseline_log = evaluate(config, output / "baseline")
++    baseline = parse_eval(baseline_log)
++    best_ms = gate_ms(baseline, "device")
++    if not baseline.correctness or best_ms is None:
++        raise RuntimeError("Baseline did not pass the frozen NPU evaluator")
++    original = best_ms
++    append_record(
++        trajectory,
++        IterationRecord(
++            iter=0,
++            decision_id="baseline",
++            change="measured prefetch baseline",
++            correctness=True,
++            verdict="KEEP",
++            device_median_ms=best_ms,
++            ref_device_ms=baseline.ref_device_ms,
++            vs_ref_device=baseline.vs_ref_device,
++            device_window_basis="npu_graph",
++            profiler={"source_sha256": source_digest(workspace, allowed)},
++        ),
++    )
++    (output / "baseline-eval.txt").write_text(baseline_log)
++    for iteration in range(1, rounds + 1):
++        step = output / f"iteration-{iteration:02d}"
++        step.mkdir()
++        saved = {name: (workspace / name).read_bytes() for name in allowed}
++        frozen = tracked_fingerprints(workspace)
++        current = source_digest(workspace, allowed)
++        entry_ms = best_ms
++        records = load_records(trajectory)
++        digest = build_digest(records, {}, "device")
++        extra = config.get("iteration_guidance", [])
++        guidance = extra[min(iteration - 1, len(extra) - 1)] if extra else ""
++        briefing = (
++            f"You are ForgeKernel Ascend architecture agent. Analyze ONE bounded, concrete optimization. "
++            f"Do not edit files or launch NPU jobs. No subagents. Work only in {workspace}.\n"
++            f"Task contract:\n{description}\nEditable implementation:\n{json.dumps(allowed)}\n"
++            f"Observed history (ms, lower is better):\n{json.dumps(digest)}\n"
++            "The trajectory source_sha256 hashes sorted path names plus bytes; it is not a raw file SHA. "
++            "For raw hashes compare the evaluator consumer_source_sha256/source_sha256 manifest.\n"
++            f"Iteration focus: {guidance}\n"
++            "Read the implementation and identify a change with likely measurable benefit, correctness obligations, "
++            "and validation. All graph work, including prefetch state reset and consume, stays timed. "
++            "Use at most one coherent optimization bundle. The supplied focus already identifies the candidate; "
++            "inspect only the relevant implementation and API examples, avoid broad repository scans. "
++            "Return a brief implementation instruction, not code."
++        )
++        plan = agent(
++            workspace, step, "architect", briefing, config.get("agent_timeout_s", 600)
++        )
++        prompt = (
++            f"You are the coding agent for an experimental ForgeKernel Ascend campaign. "
++            f"Implement the architect decision. Edit ONLY {json.dumps(allowed)}. "
++            "Do not edit tests, benchmark scripts, CANN setup, environment, task config, or other repositories. "
++            "Do not invoke NPU jobs, rebuild/install packages, commit, push, spawn subagents, or modify credentials. "
++            "The external runner performs compilation and frozen Graph validation after your turn. "
++            "Use local source and the existing Ascend APIs; no CUDA/SIMT APIs unsupported on 910.\n"
++            f"Task:\n{description}\nArchitect:\n{plan}\n"
++            "End with exactly these fields:\ndecision_id: D" + str(iteration) + "\n"
++            "change: one sentence describing the implemented change\nfiles_touched: comma separated paths\n"
++            "If no valid change is possible, instead return EXHAUSTED: reason."
++        )
++        verdict = "REVERT"
++        reason = ""
++        reply = ""
++        changed = set()
++        result = None
++        try:
++            reply = agent(
++                workspace, step, "student", prompt, config.get("agent_timeout_s", 600)
++            )
++            turn = parse_student_turn(reply)
++            after = tracked_fingerprints(workspace)
++            changed = {
++                name
++                for name in frozen.keys() | after.keys()
++                if frozen.get(name) != after.get(name)
++            }
++            if changed - set(allowed):
++                raise RuntimeError(
++                    f"Candidate changed protected files: {sorted(changed - set(allowed))}"
++                )
++            if isinstance(turn, Exhausted):
++                reason = turn.reason
++                for name, data in saved.items():
++                    (workspace / name).write_bytes(data)
++                (step / "exhausted.txt").write_text(reason)
++                break
++            if not isinstance(turn, Record):
++                raise RuntimeError(
++                    "This bounded campaign requires a concrete edit, not a standalone probe request"
++                )
++            after = tracked_fingerprints(workspace)
++            changed = {
++                name
++                for name in frozen.keys() | after.keys()
++                if frozen.get(name) != after.get(name)
++            }
++            if not candidate_allowed(changed, set(allowed)):
++                raise RuntimeError(
++                    f"Candidate changes outside allowed scope or no change: {sorted(changed)}"
++                )
++            candidate_hash = source_digest(workspace, allowed)
++            (step / "candidate.patch").write_bytes(
++                subprocess.check_output(
++                    ["git", "diff", "--binary", "--", *allowed], cwd=workspace
++                )
++            )
++            for name in changed:
++                path = step / "source" / name
++                path.parent.mkdir(parents=True, exist_ok=True)
++                path.write_bytes((workspace / name).read_bytes())
++            text = evaluate(config, step / "eval")
++            (step / "eval-output.txt").write_text(text)
++            keep, result = assess(text, best_ms, minimum_gain)
++            if keep:
++                verdict = "KEEP"
++                best_ms = gate_ms(result, "device")
++            elif not result.correctness:
++                reason = result.error or "Frozen correctness failed"
++            else:
++                reason = "No gain beyond the configured noise floor"
++        except Exception as error:
++            reason = f"{type(error).__name__}: {error}"
++            candidate_hash = source_digest(workspace, allowed)
++        if verdict == "REVERT":
++            for name, data in saved.items():
++                (workspace / name).write_bytes(data)
++        append_record(
++            trajectory,
++            IterationRecord(
++                iter=iteration,
++                decision_id=f"D{iteration}",
++                change=reply[:1000] if reply else guidance,
++                correctness=result.correctness if result else False,
++                verdict=verdict,
++                device_median_ms=gate_ms(result, "device") if result else None,
++                ref_device_ms=result.ref_device_ms if result else None,
++                vs_ref_device=result.vs_ref_device if result else None,
++                metric_before=entry_ms,
++                error=reason,
++                device_window_basis="npu_graph",
++                profiler={
++                    "source_sha256": candidate_hash,
++                    "base_source_sha256": current,
++                },
++            ),
++        )
++        print(
++            json.dumps(
++                {
++                    "iteration": iteration,
++                    "verdict": verdict,
++                    "candidate_ms": gate_ms(result, "device") if result else None,
++                    "best_ms": best_ms,
++                    "reason": reason,
++                }
++            ),
++            flush=True,
++        )
++        records = load_records(trajectory)
++        (output / "digest.json").write_text(
++            json.dumps(build_digest(records, {}, "device"), indent=2) + "\n"
++        )
++        if changed - set(allowed):
++            raise RuntimeError(
++                "Unexpected edits outside allowlist: stopped; examine isolated worktree"
++            )
++        if detect_plateau(
++            records,
++            window=config.get("plateau_window", 3),
++            noise_floor=minimum_gain,
++            gate_window="device",
++        ):
++            break
++    summary = {
++        "baseline_prefetch_ms": original,
++        "best_prefetch_ms": best_ms,
++        "speedup_vs_initial_prefetch": original / best_ms,
++        "best_source_sha256": source_digest(workspace, allowed),
++        "note": "No no-prefetch speedup claim unless the recorded paired reference is beaten.",
++    }
++    (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
++    print(json.dumps(summary), flush=True)
++    return 0
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("task", type=Path)
++    parser.add_argument("--output", type=Path, required=True)
++    parser.add_argument("--rounds", type=int)
++    args = parser.parse_args(argv)
++    return run(args.task, args.output, args.rounds)
+diff --git a/tests/test_ascend_adapter.py b/tests/test_ascend_adapter.py
+new file mode 100644
+index 0000000..8bb40a0
+--- /dev/null
++++ b/tests/test_ascend_adapter.py
+@@ -0,0 +1,65 @@
++import json
++import subprocess
++
++from forgekernel import ascend
++from forgekernel.ascend import assess, candidate_allowed
++
++
++def test_keep_requires_correctness_and_device_gain():
++    def payload(ok, time):
++        return "=== JSON ===\n" + json.dumps(
++            {"correctness": {"pass": ok}, "performance": {"device_median_ms": time}}
++        )
++
++    assert assess(payload(True, 3.0), 4.0, 0.015)[0]
++    assert not assess(payload(False, 1.0), 4.0, 0.015)[0]
++    assert not assess(payload(True, 3.99), 4.0, 0.015)[0]
++    assert not assess(payload(True, None), 4.0, 0.015)[0]
++    assert not assess(payload(True, 0), 4.0, 0.015)[0]
++    assert not assess(payload(True, -1), 4.0, 0.015)[0]
++
++
++def test_edit_scope_rejects_empty_or_validator_changes():
++    assert candidate_allowed({"kernel.h"}, {"kernel.h", "consume.py"})
++    assert not candidate_allowed(set(), {"kernel.h"})
++    assert not candidate_allowed({"kernel.h", "eval.py"}, {"kernel.h"})
++
++
++def test_rejected_candidate_restores_source(tmp_path, monkeypatch):
++    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
++    (tmp_path / "kernel.h").write_text("original\n")
++    (tmp_path / "contract.md").write_text("Frozen oracle; full graph timing.")
++    baseline = {"correctness": {"pass": True}, "performance": {"device_median_ms": 4.0}}
++    (tmp_path / "baseline.json").write_text(json.dumps(baseline))
++    config = {
++        "workspace": str(tmp_path),
++        "editable_files": ["kernel.h"],
++        "description": "contract.md",
++        "baseline_result": "baseline.json",
++        "rounds": 1,
++    }
++    (tmp_path / "task.json").write_text(json.dumps(config))
++    output = tmp_path / "run"
++
++    def fake_agent(workspace, output_dir, role, prompt, timeout):
++        if role == "student":
++            (workspace / "kernel.h").write_text("incorrect\n")
++            return "decision_id: D1\nchange: test edit\nfiles_touched: kernel.h"
++        return "Try a candidate."
++
++    monkeypatch.setattr(ascend, "agent", fake_agent)
++    monkeypatch.setattr(
++        ascend,
++        "evaluate",
++        lambda *args: json.dumps(
++            {"correctness": {"pass": False}, "performance": {"device_median_ms": 1.0}}
++        ),
++    )
++    assert ascend.run(tmp_path / "task.json", output) == 0
++    assert (tmp_path / "kernel.h").read_text() == "original\n"
++    rows = [
++        json.loads(row) for row in (output / "status.jsonl").read_text().splitlines()
++    ]
++    assert rows[-1]["verdict"] == "REVERT"
++    assert rows[-1]["metric_before"] == 4.0
++    assert json.loads((output / "summary.json").read_text())["best_prefetch_ms"] == 4.0
