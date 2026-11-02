@@ -284,6 +284,9 @@ __aicore__ inline bool FinalizeStandardCounts(
                     EchoPrefetch::PublishCutoffs(prefetchContext, thresholdScratch, requestState, topkSourceIds, actualSeqLengthsQuery, \
                                                   tiling_data->bSize, &tPipe);                                           \
                     tPipe.Reset();                                                                                      \
+                    EchoPrefetch::PublishRequestMap(prefetchContext, requestState, actualSeqLengthsQuery,                 \
+                        tiling_data->bSize, tiling_data->cacheSlotsSize, &tPipe);                                           \
+                    tPipe.Reset();                                                                                      \
                 }                                                                                                       \
                 const uint32_t unionOwner = GetBlockIdx() / LIMConfig::AIVS_PER_AIC;                                   \
                 const uint32_t unionOwners = GetBlockNum();                                                            \

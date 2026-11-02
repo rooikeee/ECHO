@@ -313,6 +313,16 @@ class EchoMTPIndexerPrefetch(EchoIndexerPrefetch):
         self.buffers += (self.union_matches, self.union_remaining, self.union_prefix,
                          self.union_permutation, self.union_used)
 
+    def copy_sfa_inputs(self):
+        """Pass these explicit tensors to fused CopySFA after indexer().
+
+        The first query's ready row is the request-shared source->staging map:
+        0/1 do not identify a payload; 2+row selects flattened staging row.
+        LIM publishes it after all candidate copies finish. No consume() call
+        or reordered output allocation is needed on this path.
+        """
+        return {"prefetch_map": self.ready, "prefetch_kv": self.kv, "prefetch_rope": self.rope}
+
     def allocate_outputs(self, outputs):
         """Allocate contiguous union scratch with the fixed outputs before capture."""
         outputs = super().allocate_outputs(outputs)

@@ -20,6 +20,9 @@ TILING_DATA_FIELD_DEF(uint32_t, copyCap);
 TILING_DATA_FIELD_DEF(uint32_t, missCap);
 TILING_DATA_FIELD_DEF(uint32_t, hbmMaxBlockNum);
 TILING_DATA_FIELD_DEF(uint32_t, dramMaxBlockNum);
+TILING_DATA_FIELD_DEF(uint32_t, prefetchSourceCapacity);
+TILING_DATA_FIELD_DEF(uint32_t, prefetchCapacity);
+TILING_DATA_FIELD_DEF(uint32_t, prefetchOwnerStride);
 END_TILING_DATA_DEF
 
 REGISTER_TILING_DATA_CLASS(

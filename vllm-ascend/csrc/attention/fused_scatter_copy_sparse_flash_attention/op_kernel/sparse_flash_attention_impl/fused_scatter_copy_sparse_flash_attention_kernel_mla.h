@@ -81,6 +81,16 @@ public:
 				                __gm__ uint8_t *gmTiling, TPipe *tPipe);
 
     __aicore__ inline void Process();
+    __aicore__ inline void InitPrefetchGather(
+        __gm__ uint8_t *map, __gm__ uint8_t *kv, __gm__ uint8_t *rope,
+        __gm__ uint8_t *owners, __gm__ uint8_t *queryEnds,
+        uint32_t sourceCapacity, uint32_t capacity, uint32_t ownerStride)
+    {
+        if ASCEND_IS_AIV {
+            vectorService.InitPrefetchGather(map, kv, rope, owners, queryEnds,
+                                             sourceCapacity, capacity, ownerStride);
+        }
+    }
     __aicore__ inline void InitSourceAwareGather(
         __gm__ uint8_t *dramKeyRope, __gm__ uint8_t *dramKey,
         __gm__ uint8_t *dramBlockTable, __gm__ uint8_t *sourceTokenIds,

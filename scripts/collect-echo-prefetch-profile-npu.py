@@ -142,7 +142,39 @@ def run_batch(args, helper, upstream, batch):
         out = torch.empty_like(query)
         actual_kv = torch.full((batch,), args.hot_tokens + 128, dtype=torch.int32, device="npu")
 
-        def sfa(data):
+        fused_consumer = args.prefetch_consumer == "copysfa"
+
+        def update_prefetch_coverage():
+            # Diagnostics only, after replay/timing. No CPU tensor reads enter
+            # the captured path. Keep v1's coverage reports comparable.
+            if not fused_consumer:
+                return
+            cpu_sources = outputs[0].cpu().view(total_queries, -1)
+            cpu_misses = outputs[2].cpu().tolist()
+            cpu_union = outputs[3].cpu()
+            cpu_union_counts = outputs[5].cpu().tolist()
+            cpu_prefetched = prefetch.sources.cpu()
+            cpu_counts = prefetch.counts.cpu().tolist()
+            used, union_used = [], []
+            for b in range(batch):
+                available = set()
+                for row in range(b * q, (b + 1) * q):
+                    ids = cpu_prefetched[row, :cpu_counts[row]].long()
+                    available.update(ids.tolist())
+                if available:
+                    logical = torch.tensor(sorted(available), dtype=torch.long)
+                    tags = prefetch.ready[b * q, logical.to(case.query.device)].cpu().long() - 2
+                    assert bool(((tags >= b * q * prefetch.capacity) &
+                                 (tags < (b + 1) * q * prefetch.capacity)).all())
+                    flat_sources = cpu_prefetched.reshape(-1)
+                    torch.testing.assert_close(flat_sources[tags].long(), logical)
+                union_used.append(sum(int(t) in available for t in cpu_union[b, :cpu_union_counts[b]].tolist()))
+                for row in range(b * q, (b + 1) * q):
+                    used.append(sum(int(t) in available for t in cpu_sources[row, :cpu_misses[row]].tolist()))
+            prefetch.used.copy_(torch.tensor(used, dtype=torch.int32, device=case.query.device))
+            prefetch.union_used.copy_(torch.tensor(union_used, dtype=torch.int32, device=case.query.device))
+
+        def sfa(data, use_prefetch=False):
             sources, slots, misses, miss_sources, miss_slots, counts = data
             torch.ops._C_ascend.npu_fused_scatter_copy_sparse_flash_attention(
                 query_rope, query, case.actual_seq_lengths_query, actual_kv,
@@ -150,6 +182,7 @@ def run_batch(args, helper, upstream, batch):
                 miss_sources, miss_slots, counts, hbm_table, dram_table,
                 rope, kv, host_rope.device_view, host_kv.device_view,
                 1 / math.sqrt(576), out,
+                **(prefetch.copy_sfa_inputs() if use_prefetch else {}),
             )
 
         def baseline():
@@ -158,8 +191,11 @@ def run_batch(args, helper, upstream, batch):
 
         def with_prefetch():
             prefetch.indexer(cache, outputs)
-            prefetch.consume(outputs, hbm_table, kv, rope)
-            sfa(consumed)
+            if fused_consumer:
+                sfa(outputs, use_prefetch=True)
+            else:
+                prefetch.consume(outputs, hbm_table, kv, rope)
+                sfa(consumed)
 
         def reset():
             cache.copy_(case.cache_seed)
@@ -234,10 +270,13 @@ def run_batch(args, helper, upstream, batch):
                     assert bool((prefetch.used <= available).all())
                     if mode == "context-budget-0":
                         assert not bool(prefetch.counts.any())
-                    torch.testing.assert_close(consumed[2], outputs[2] - prefetch.used, rtol=0, atol=0)
-                    if args.mtp:
-                        torch.testing.assert_close(consumed[5], outputs[5] - prefetch.union_used, rtol=0, atol=0)
+                    if not fused_consumer:
+                        torch.testing.assert_close(consumed[2], outputs[2] - prefetch.used, rtol=0, atol=0)
+                        if args.mtp:
+                            torch.testing.assert_close(consumed[5], outputs[5] - prefetch.union_used, rtol=0, atol=0)
                 assert addresses == [tensor.data_ptr() for tensor in watched]
+            if mode != "baseline":
+                update_prefetch_coverage()
             copied = [0] * total_queries if mode == "baseline" else prefetch.counts.cpu().tolist()
             useful = [0] * total_queries if mode == "baseline" else prefetch.used.cpu().tolist()
             union_used = ([0] * batch if mode == "baseline" else
@@ -254,12 +293,80 @@ def run_batch(args, helper, upstream, batch):
                 "copy_sfa_host_read_bytes": sum(count - used for count, used in zip(original_misses, useful)) * 576 * 2,
                 "correctness": "exact_cache_and_raw_indexer_outputs_attention_rtol_0.02_atol_0.002",
                 "independent_attention_reference": args.attention_reference,
-                **helper.measure(graph, reset, args.repeats),
+                **(helper.measure(graph, reset, args.repeats) if args.profile_scope == "chain" else {}),
             }
-            if args.profile_repeats:
+            if args.profile_scope == "operators":
+                if mode != "baseline" and not fused_consumer:
+                    raise ValueError("Isolated operator profiling uses the fused CopySFA consumer")
+                def indexer_only():
+                    if mode == "baseline":
+                        upstream._call_op(case, cache, outputs)
+                    else:
+                        prefetch.indexer(cache, outputs)
+
+                def reset_indexer():
+                    cache.copy_(case.cache_seed)
+
+                def reset_attention():
+                    kv.copy_(kv_seed)
+                    rope.copy_(rope_seed)
+
+                row["operators"] = {}
+                for op_name in ("lim", "copysfa"):
+                    reset()
+                    indexer_only()  # Fixed raw miss metadata and complete staging, outside profiling.
+                    torch.npu.synchronize()
+                    op_call = indexer_only if op_name == "lim" else lambda: sfa(
+                        outputs, use_prefetch=mode != "baseline")
+                    op_reset = reset_indexer if op_name == "lim" else reset_attention
+                    op_reset()
+                    op_graph = helper.capture(op_call)
+                    measurement = helper.measure(op_graph, op_reset, args.repeats)
+                    if args.profile_repeats:
+                        trace_path = directory / mode / op_name
+                        measurement["profile"] = helper.profile(
+                            op_graph, op_reset, trace_path, args.profile_repeats)
+                    if op_name == "copysfa":
+                        torch.testing.assert_close(kv, expected_kv, rtol=0, atol=0)
+                        torch.testing.assert_close(rope, expected_rope, rtol=0, atol=0)
+                        torch.testing.assert_close(out.float(), expected_out.float(), rtol=.02, atol=.002)
+                    measurement["scope"] = ("single LIM graph including ready/count/source reset" if op_name == "lim"
+                                            else "single CopySFA graph; LIM and prefetch completed outside timing")
+                    row["operators"][op_name] = measurement
+                    del op_graph
+            elif args.profile_repeats:
                 trace_path = directory / mode
                 helper.profile(graph, reset, trace_path, args.profile_repeats)
                 row["stages"] = summarize_chain(trace_path)
+            if fused_consumer and mode == "prefetch-64-history" and args.check_staging_source:
+                # Prove CopySFA uses the completed buffer, rather than silently
+                # falling back to Host. Poison only staged Host tokens after LIM.
+                reset()
+                prefetch.indexer(cache, outputs)
+                torch.npu.synchronize()
+                saved_host = []
+                for b in range(batch):
+                    ids = set()
+                    for qrow in range(b * q, (b + 1) * q):
+                        ids.update(prefetch.sources[qrow, :int(prefetch.counts[qrow])].cpu().tolist())
+                    logical = torch.tensor(sorted(ids), dtype=torch.long)
+                    physical = b * blocks * 128 + logical
+                    hk = host_kv.tensor.view(-1, 512)
+                    hr = host_rope.tensor.view(-1, 64)
+                    saved_host.append((physical, hk[physical].clone(), hr[physical].clone()))
+                    hk[physical] = 7
+                    hr[physical] = -7
+                try:
+                    sfa(outputs, use_prefetch=True)
+                    torch.npu.synchronize()
+                    torch.testing.assert_close(kv, expected_kv, rtol=0, atol=0)
+                    torch.testing.assert_close(rope, expected_rope, rtol=0, atol=0)
+                    torch.testing.assert_close(out.float(), expected_out.float(), rtol=.02, atol=.002)
+                    row["staging_source_check"] = "passed: poisoned staged Host tokens after LIM; exact KV/KPE retained"
+                finally:
+                    for physical, hk_saved, hr_saved in saved_host:
+                        host_kv.tensor.view(-1, 512)[physical] = hk_saved
+                        host_rope.tensor.view(-1, 64)[physical] = hr_saved
             if args.mtp and mode != "baseline":
                 query_seed = case.query.clone()
                 weight_seed = case.index_weights.clone()
@@ -283,8 +390,10 @@ def run_batch(args, helper, upstream, batch):
                         for index in (3, 4):
                             torch.testing.assert_close(outputs[index][b, :count],
                                                        references[4 + index][b, :count], rtol=0, atol=0)
-                    torch.testing.assert_close(consumed[2], outputs[2] - prefetch.used, rtol=0, atol=0)
-                    torch.testing.assert_close(consumed[5], outputs[5] - prefetch.union_used, rtol=0, atol=0)
+                    update_prefetch_coverage()
+                    if not fused_consumer:
+                        torch.testing.assert_close(consumed[2], outputs[2] - prefetch.used, rtol=0, atol=0)
+                        torch.testing.assert_close(consumed[5], outputs[5] - prefetch.union_used, rtol=0, atol=0)
                     assert bool(((prefetch.counts >= 0) & (prefetch.counts <= prefetch.budgets)).all())
                     assert bool(torch.isfinite(prefetch.thresholds).all())
                     if name == "zero-budget":
@@ -337,6 +446,7 @@ def run_batch(args, helper, upstream, batch):
                 for actual, expected in zip((cache, kv, rope), reference[:3]):
                     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
                 torch.testing.assert_close(out.float(), reference[3].float(), rtol=.02, atol=.002)
+                update_prefetch_coverage()
                 assert not bool(outputs[2].any()) and not bool(prefetch.union_used.any())
                 assert addresses == [tensor.data_ptr() for tensor in watched]
                 records.append({"scenario": "persistent-all-hit", "remaining_misses": 0})
@@ -344,11 +454,10 @@ def run_batch(args, helper, upstream, batch):
             rows.append(row)
             (directory / "metrics.json").write_text(json.dumps(rows, indent=2) + "\n")
             print(json.dumps(row), flush=True)
-            del graph
             graph = None
         return rows
     finally:
-        del graph
+        graph = None
         gc.collect()
         torch.npu.synchronize()
         host_rope.close()
@@ -357,6 +466,11 @@ def run_batch(args, helper, upstream, batch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile-scope", choices=["chain", "operators"], default="chain")
+    parser.add_argument("--check-staging-source", action="store_true",
+                        help="after LIM, poison prefetched Host entries and prove CopySFA reads staging")
+    parser.add_argument("--prefetch-consumer", choices=["python", "copysfa"], default="python",
+                        help="consume staging inside CopySFA without separate matching/partition kernels")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--batches", nargs="+", type=int, default=[16])
     parser.add_argument("--mtp", type=int, choices=[0, 3], default=3)
@@ -384,6 +498,8 @@ def main():
     if (args.context % 128 or args.hot_tokens % 256 or
             not 2048 <= args.hot_tokens <= 16128 or args.context - 128 <= args.hot_tokens):
         parser.error("need aligned context and hot tokens in [2048,16128], with context-128 > hot tokens")
+    if args.prefetch_consumer == "copysfa" and args.mtp != 3:
+        parser.error("CopySFA prefetch validation currently requires MTP3")
     if args.tp <= 0 or args.attention_heads % args.tp or args.attention_heads // args.tp < 1:
         parser.error("need supported local attention head count")
     if args.repeats < 1 or args.profile_repeats < 0 or any(batch < 1 for batch in args.batches):
@@ -399,11 +515,17 @@ def main():
                       native_root / "csrc/attention/fused_scatter_copy_sparse_flash_attention/op_kernel/sparse_flash_attention_impl/fused_scatter_copy_sparse_flash_attention_service_vector_mla.h",
                       native_root / "csrc/attention/fused_scatter_copy_sparse_flash_attention/op_host/fused_scatter_copy_sparse_flash_attention_tiling.cpp",
                       native_root / "vllm_ascend/attention/sfa_kv_offload.py"]
+    native_sources.extend([
+        native_root / "csrc/attention/fused_lightning_indexer_manage/op_kernel/echo_indexer_prefetch.h",
+        native_root / "csrc/attention/fused_lightning_indexer_manage/op_kernel/fused_lightning_indexer_manage.cpp",
+        native_root / "csrc/attention/fused_scatter_copy_sparse_flash_attention/op_kernel/prefetch_copy_owners.h",
+        native_root / "csrc/attention/fused_scatter_copy_sparse_flash_attention/op_kernel/fused_scatter_copy_sparse_flash_attention.cpp",
+    ])
     manifest = {
         "source_root": str(native_root), "variant": os.environ.get("ECHO_BENCH_VARIANT", "working_tree"),
         "native_source_sha256": {str(p.relative_to(native_root)): hashlib.sha256(p.read_bytes()).hexdigest()
                                   for p in native_sources},
-        "status": "running", "coverage": "synthetic_single_layer_chained_graph_not_model_inference",
+        "status": "running", "coverage": "synthetic_fused_operator_graphs_not_model_inference",
         "context_tokens": args.context, "offload_prefix_tokens": args.context - 128,
         "hot_tokens_per_request": args.hot_tokens, "topk": 2048, "tail_tokens": 128,
         "indexer_heads": args.indexer_heads, "indexer_head_dim": 128, "dtype": "bfloat16",
@@ -411,6 +533,8 @@ def main():
         "attention_kernel_heads": max(4 if args.native_four_heads else 8, args.attention_heads // args.tp),
         "actual_execution_devices": 1, "physical_device": os.environ.get("ASCEND_RT_VISIBLE_DEVICES"),
         "torch": torch.__version__, "torch_npu": torch_npu.__version__,
+        "profile_scope": args.profile_scope,
+        "prefetch_consumer": args.prefetch_consumer,
         "capacity": args.capacity, "batches": args.batches,
         "mtp": args.mtp, "queries_per_request": 1 + args.mtp,
         "mtp_scope": "target verification only; excludes three draft forwards, acceptance/rejection and model layers",
@@ -445,7 +569,8 @@ def main():
             result_path.write_text(json.dumps(manifest, indent=2) + "\n")
             gc.collect()
             torch.npu.empty_cache()
-        manifest["status"] = "completed_operator_chain_only"
+        manifest["status"] = ("completed_single_operator_profiles" if args.profile_scope == "operators"
+                              else "completed_operator_chain_only")
     except Exception as error:
         manifest["status"] = "failed"
         manifest["error"] = repr(error)

@@ -3648,7 +3648,8 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "Tensor hbm_block_table, Tensor dram_block_table, "
         "Tensor(a!) hbm_k_rope, Tensor(b!) hbm_kv_cache, "
         "Tensor dram_k_rope, Tensor dram_kv_cache, float scale_value, "
-        "Tensor(c!) attention_out) -> ()"
+        "Tensor(c!) attention_out, Tensor? prefetch_map=None, "
+        "Tensor? prefetch_kv=None, Tensor? prefetch_rope=None) -> ()"
     );
     ops.impl("npu_fused_scatter_copy_sparse_flash_attention", torch::kPrivateUse1,
              &vllm_ascend::npu_fused_scatter_copy_sparse_flash_attention);

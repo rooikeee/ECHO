@@ -44,6 +44,13 @@ public:
         this->Input("miss_counts").ParamType(REQUIRED).DataTypeList({ge::DT_INT32})
             .FormatList({ge::FORMAT_ND}).AutoContiguous();
 
+        this->Input("prefetch_map").ParamType(OPTIONAL).DataTypeList({ge::DT_INT32})
+            .FormatList({ge::FORMAT_ND}).AutoContiguous();
+        this->Input("prefetch_kv").ParamType(OPTIONAL).DataType({ge::DT_BF16, ge::DT_FLOAT16})
+            .FormatList({ge::FORMAT_ND}).AutoContiguous();
+        this->Input("prefetch_rope").ParamType(OPTIONAL).DataType({ge::DT_BF16, ge::DT_FLOAT16})
+            .FormatList({ge::FORMAT_ND}).AutoContiguous();
+
         this->Output("attention_out").ParamType(REQUIRED)
             .DataType({ge::DT_BF16, ge::DT_FLOAT16}).FormatList({ge::FORMAT_ND});
 

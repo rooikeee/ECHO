@@ -29,6 +29,9 @@ constexpr uint32_t TOPK_MISS_COUNTS = 14;
 constexpr uint32_t MISS_SOURCE_IDS = 15;
 constexpr uint32_t MISS_DST_SLOTS = 16;
 constexpr uint32_t MISS_COUNTS = 17;
+constexpr uint32_t PREFETCH_MAP = 18;
+constexpr uint32_t PREFETCH_KV = 19;
+constexpr uint32_t PREFETCH_ROPE = 20;
 
 constexpr int64_t BLOCK_SIZE = 128;
 constexpr int64_t CKV_DIM = 512;
@@ -232,6 +235,34 @@ ge::graphStatus TilingFusedScatterCopySparseFlashAttention(
         return ge::GRAPH_FAILED;
     }
 
+    uint32_t prefetchSourceCapacity = 0;
+    uint32_t prefetchCapacity = 0;
+    uint32_t prefetchOwnerStride = 0;
+    const auto *prefetchMap = context->GetOptionalInputShape(PREFETCH_MAP);
+    const auto *prefetchKv = context->GetOptionalInputShape(PREFETCH_KV);
+    const auto *prefetchRope = context->GetOptionalInputShape(PREFETCH_ROPE);
+    OPS_ERR_IF((prefetchMap != nullptr) != (prefetchKv != nullptr) ||
+                   (prefetchMap != nullptr) != (prefetchRope != nullptr),
+               OPS_LOG_E(context->GetNodeName(), "All prefetch tensors must be supplied together."),
+               return ge::GRAPH_FAILED);
+    if (prefetchMap != nullptr) {
+        const auto map = prefetchMap->GetStorageShape();
+        const auto kv = prefetchKv->GetStorageShape();
+        const auto rope = prefetchRope->GetStorageShape();
+        const int64_t rows = context->GetInputShape(QUERY)->GetStorageShape().GetDim(0);
+        OPS_ERR_IF(!IsShape(map, {rows, -1}) || map.GetDim(1) <= 0 || map.GetDim(1) > (1 << 21) ||
+                       !IsShape(kv, {rows, -1, CKV_DIM}) || kv.GetDim(1) <= 0 || kv.GetDim(1) > 2048 ||
+                       !IsShape(rope, {rows, kv.GetDim(1), KPE_DIM}) || hbmMaxBlocks > 257 ||
+                       context->GetOptionalInputDesc(PREFETCH_MAP)->GetDataType() != ge::DT_INT32 ||
+                       context->GetOptionalInputDesc(PREFETCH_KV)->GetDataType() != context->GetInputDesc(QUERY)->GetDataType() ||
+                       context->GetOptionalInputDesc(PREFETCH_ROPE)->GetDataType() != context->GetInputDesc(QUERY)->GetDataType(),
+                   OPS_LOG_E(context->GetNodeName(), "Invalid prefetch map/payload shape or dtype."),
+                   return ge::GRAPH_FAILED);
+        prefetchSourceCapacity = static_cast<uint32_t>(map.GetDim(1));
+        prefetchCapacity = static_cast<uint32_t>(kv.GetDim(1));
+        prefetchOwnerStride = hbmMaxBlocks * BLOCK_SIZE;
+    }
+
     // CheckFusedInputs owns this operator's variable-width MTP contract. The
     // shared checker intentionally remains strict for standalone B/4B FusedScatterCopySparseFlashAttention.
     FusedScatterCopySparseFlashAttentionTiling sfaTiling(context);
@@ -254,14 +285,15 @@ ge::graphStatus TilingFusedScatterCopySparseFlashAttention(
     FusedScatterCopySparseFlashAttentionTilingData fusedTiling;
     const size_t baseSize = raw->GetDataSize();
     const size_t fusedSize = fusedTiling.GetDataSize();
-    constexpr size_t fusedSuffixSize = sizeof(uint32_t) * 4U;
-    OPS_ERR_IF(fusedSize != baseSize + fusedSuffixSize ||
+    constexpr size_t fusedSuffixSize = sizeof(uint32_t) * 7U;
+    OPS_ERR_IF(fusedSize != (baseSize + fusedSuffixSize + 7U) / 8U * 8U ||
                    raw->GetCapacity() < fusedSize,
                OPS_LOG_E(context->GetNodeName(),
                          "Unexpected FusedScatterCopySparseFlashAttention/fused-MTP tiling layout: base=%zu, fused=%zu, capacity=%zu.",
                          baseSize, fusedSize, raw->GetCapacity()),
                return ge::GRAPH_FAILED);
     auto *payload = static_cast<uint8_t *>(raw->GetData());
+    std::memset(payload + baseSize, 0, fusedSize - baseSize);
     std::memcpy(payload + baseSize, &copyCap, sizeof(copyCap));
     std::memcpy(payload + baseSize + sizeof(uint32_t),
                 &missCap, sizeof(missCap));
@@ -269,12 +301,17 @@ ge::graphStatus TilingFusedScatterCopySparseFlashAttention(
                 &hbmMaxBlocks, sizeof(hbmMaxBlocks));
     std::memcpy(payload + baseSize + sizeof(uint32_t) * 3U,
                 &dramMaxBlocks, sizeof(dramMaxBlocks));
+    std::memcpy(payload + baseSize + sizeof(uint32_t) * 4U, &prefetchSourceCapacity, sizeof(uint32_t));
+    std::memcpy(payload + baseSize + sizeof(uint32_t) * 5U, &prefetchCapacity, sizeof(uint32_t));
+    std::memcpy(payload + baseSize + sizeof(uint32_t) * 6U, &prefetchOwnerStride, sizeof(uint32_t));
     raw->SetDataSize(fusedSize);
 
     size_t *workspaces = context->GetWorkspaceSizes(1);
     OPS_ERR_IF(workspaces == nullptr,
                OPS_LOG_E(context->GetNodeName(), "Workspace array is missing."),
                return ge::GRAPH_FAILED);
+    const uint64_t batchSize = context->GetInputShape(CACHE_TOKENS)->GetStorageShape().GetDim(0);
+    workspaces[0] += (batchSize * prefetchOwnerStride * sizeof(int32_t) + 511U) / 512U * 512U;
     return ge::GRAPH_SUCCESS;
 }
 

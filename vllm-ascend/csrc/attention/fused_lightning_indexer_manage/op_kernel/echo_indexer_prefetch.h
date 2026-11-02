@@ -42,6 +42,53 @@ __aicore__ inline void PublishCutoffs(
     }
 }
 
+// Called after the existing post-TopK AIV barrier. One request owner merges
+// the bounded candidate lists into the first query's existing ready row.
+// No atomics and no additional KV copies. Lowest query wins duplicate sources.
+__aicore__ inline void PublishRequestMap(
+    __gm__ uint8_t *contextAddr, __gm__ uint8_t *statesAddr,
+    __gm__ uint8_t *endsAddr, uint32_t batches, uint32_t sourceCapacity, TPipe *pipe)
+{
+    GlobalTensor<int64_t> context;
+    GlobalTensor<int32_t> states, ends;
+    context.SetGlobalBuffer((__gm__ int64_t *)contextAddr);
+    states.SetGlobalBuffer((__gm__ int32_t *)statesAddr);
+    ends.SetGlobalBuffer((__gm__ int32_t *)endsAddr);
+    TBuf<TPosition::VECCALC> input;
+    pipe->InitBuffer(input, 2048U * sizeof(int32_t));
+    auto ids = input.Get<int32_t>();
+    for (uint32_t b = GetBlockIdx() / 2U; b < batches; b += GetBlockNum()) {
+        if (states.GetValue(b) != -1) continue;
+        const int32_t begin = b == 0 ? 0 : ends.GetValue(b - 1U);
+        const int32_t end = ends.GetValue(b);
+        const uint32_t base = static_cast<uint32_t>(begin) * 14U;
+        const uint32_t capacity = static_cast<uint32_t>(context.GetValue(base + 12U));
+        if (capacity == 0U || capacity > 2048U) continue;
+        GlobalTensor<int32_t> counts, sources, map;
+        counts.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 2U));
+        sources.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 3U));
+        map.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 5U));
+        for (int32_t q = end - 1; q >= begin; --q) {
+            const int32_t count = counts.GetValue(q);
+            if (count <= 0 || static_cast<uint32_t>(count) > capacity) continue;
+            SetWaitFlag<HardEvent::S_MTE2>(HardEvent::S_MTE2);
+            DataCopyPad(ids, sources[static_cast<uint64_t>(q) * capacity],
+                        DataCopyExtParams{1, static_cast<uint32_t>(count) * 4U, 0, 0, 0},
+                        DataCopyPadExtParams<int32_t>{false, 0, 0, 0});
+            SetWaitFlag<HardEvent::MTE2_S>(HardEvent::MTE2_S);
+            for (int32_t p = 0; p < count; ++p) {
+                const int32_t source = ids.GetValue(p);
+                if (source >= 0 && static_cast<uint32_t>(source) < sourceCapacity) {
+                    map.SetValue(static_cast<uint64_t>(begin) * sourceCapacity + source,
+                                 static_cast<int32_t>(q * capacity + p + 2U));
+                }
+            }
+        }
+        DataCacheCleanAndInvalid<int32_t, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(map);
+    }
+}
+
 // Internal descriptor ABI is owned by scripts/echo_indexer_prefetch.py.
 // Only one AIV owns each query's budget; no inter-core atomic return is needed.
 template <typename T>

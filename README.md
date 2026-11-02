@@ -7,6 +7,9 @@
 2026-11-02 的 [910 LIM + ECHO / ForgeKernel 优化记录](docs/FORGE_LIM_910.md)
 包含实机耗时、全命中对照、回退实验和复现入口。本轮只优化、测试上述融合算子链。
 
+后续 [CopySFA内消费预取缓冲（v2）](docs/COPYSFA_PREFETCH_V2.md) 移除中间消费kernel，
+按LIM与CopySFA分别采集单算子profiling，不做整模型端到端测试。
+
 仓库保留已有 Ascend 开发历史，包含以下源码目录：
 
 | 目录 | 上游 | 固定提交 |

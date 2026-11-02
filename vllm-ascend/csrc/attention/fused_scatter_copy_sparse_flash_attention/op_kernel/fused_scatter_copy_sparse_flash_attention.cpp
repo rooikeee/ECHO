@@ -12,6 +12,7 @@ using FusedScatterCopySparseFlashAttentionTilingDataMla =
 
 #include "sparse_flash_attention_impl/fused_scatter_copy_sparse_flash_attention_kernel_mla.h"
 #include "first_fill_scatter_copy_kernel.h"
+#include "prefetch_copy_owners.h"
 
 using namespace AscendC;
 namespace {
@@ -44,7 +45,7 @@ __aicore__ inline bool IsBatchFirstFill(
     __gm__ uint8_t *cacheTokens,
     __gm__ uint8_t *missCounts,
     uint32_t batchSize,
-    uint32_t missCap)
+    uint32_t missCap, bool &hasAnyMiss)
 {
     GlobalTensor<int32_t> cacheTokensGm;
     GlobalTensor<int32_t> missCountsGm;
@@ -53,6 +54,7 @@ __aicore__ inline bool IsBatchFirstFill(
     missCountsGm.SetGlobalBuffer(
         (__gm__ int32_t *)missCounts, batchSize);
     bool firstFill = false;
+    hasAnyMiss = false;
     for (uint32_t batchIdx = 0; batchIdx < batchSize; ++batchIdx) {
         const int32_t cacheTokenCount = cacheTokensGm.GetValue(batchIdx);
         const int32_t missCount = missCountsGm.GetValue(batchIdx);
@@ -61,6 +63,7 @@ __aicore__ inline bool IsBatchFirstFill(
         ASSERT_MSG(missCount >= 0 &&
                        static_cast<uint32_t>(missCount) <= missCap,
                    "miss_count exceeds the request-level input capacity.");
+        hasAnyMiss = hasAnyMiss || missCount > 0;
         if (missCount >= cacheTokenCount) {
             firstFill = true;
         }
@@ -88,6 +91,8 @@ __aicore__ inline void RunFusedMtp(
     __gm__ uint8_t *missSourceIds,
     __gm__ uint8_t *missDstSlots,
     __gm__ uint8_t *missCounts,
+    __gm__ uint8_t *prefetchMap, __gm__ uint8_t *prefetchKv,
+    __gm__ uint8_t *prefetchRope, __gm__ uint8_t *prefetchOwners,
     __gm__ uint8_t *attentionOut,
     __gm__ uint8_t *attentionWorkspace,
     const FusedScatterCopySparseFlashAttentionTilingData *fusedTiling,
@@ -116,6 +121,13 @@ __aicore__ inline void RunFusedMtp(
             topkMissCounts, fusedTiling->copyCap,
             fusedTiling->dramMaxBlockNum);
     }
+    if constexpr (SOURCE_AWARE) {
+        if (prefetchMap != nullptr) {
+            attention.InitPrefetchGather(prefetchMap, prefetchKv, prefetchRope,
+                prefetchOwners, actualSeqLengthsQuery, fusedTiling->prefetchSourceCapacity,
+                fusedTiling->prefetchCapacity, fusedTiling->prefetchOwnerStride);
+        }
+    }
     attention.Process();
 }
 
@@ -140,6 +152,8 @@ extern "C" __global__ __aicore__ void fused_scatter_copy_sparse_flash_attention(
     __gm__ uint8_t *missSourceIds,
     __gm__ uint8_t *missDstSlots,
     __gm__ uint8_t *missCounts,
+    __gm__ uint8_t *prefetchMap, __gm__ uint8_t *prefetchKv,
+    __gm__ uint8_t *prefetchRope,
     __gm__ uint8_t *attentionOut,
     __gm__ uint8_t *workspace,
     __gm__ uint8_t *tiling)
@@ -151,11 +165,25 @@ extern "C" __global__ __aicore__ void fused_scatter_copy_sparse_flash_attention(
     const auto *fusedTiling = &fusedTilingIn;
 
     TPipe pipe;
-    __gm__ uint8_t *attentionWorkspace = GetUserWorkspace(workspace);
+    __gm__ uint8_t *prefetchOwners = GetUserWorkspace(workspace);
+    const uint64_t ownerBytes =
+        (static_cast<uint64_t>(fusedTiling->baseParams.batchSize) *
+         fusedTiling->prefetchOwnerStride * sizeof(int32_t) + 511U) / 512U * 512U;
+    __gm__ uint8_t *attentionWorkspace = prefetchOwners + ownerBytes;
     if (TILING_KEY_IS(1)) {
+        bool hasAnyMiss = false;
         const bool firstFill = IsBatchFirstFill(
             cacheTokens, missCounts, fusedTiling->baseParams.batchSize,
-            fusedTiling->missCap);
+            fusedTiling->missCap, hasAnyMiss);
+        // All-hit takes the original gather path without owner-map work or a barrier.
+        if (!hasAnyMiss) prefetchMap = nullptr;
+        if (!firstFill && prefetchMap != nullptr) {
+            PrefetchCopy::PrepareOwners(sparseIndices, topkMissCounts, actualSeqLengthsQuery,
+                missCounts, prefetchOwners, fusedTiling->baseParams.batchSize,
+                fusedTiling->prefetchOwnerStride, &pipe);
+            SyncAll<false>();
+            if ASCEND_IS_AIV { pipe.Reset(); }
+        }
         if (firstFill) {
             if constexpr (ORIG_DTYPE_QUERY == DT_FLOAT16) {
                 RunFirstFillScatterCopy<half>(
@@ -185,6 +213,7 @@ extern "C" __global__ __aicore__ void fused_scatter_copy_sparse_flash_attention(
                     dramKeyRope, dramKvCache, dramBlockTable,
                     topkSourceIds, topkMissCounts,
                     missSourceIds, missDstSlots, missCounts,
+                    prefetchMap, prefetchKv, prefetchRope, prefetchOwners,
                     attentionOut, attentionWorkspace, fusedTiling,
                     tiling, &pipe);
             } else {
@@ -195,6 +224,7 @@ extern "C" __global__ __aicore__ void fused_scatter_copy_sparse_flash_attention(
                     dramKeyRope, dramKvCache, dramBlockTable,
                     topkSourceIds, topkMissCounts,
                     missSourceIds, missDstSlots, missCounts,
+                    prefetchMap, prefetchKv, prefetchRope, prefetchOwners,
                     attentionOut, attentionWorkspace, fusedTiling,
                     tiling, &pipe);
             }
@@ -207,6 +237,7 @@ extern "C" __global__ __aicore__ void fused_scatter_copy_sparse_flash_attention(
                     dramKeyRope, dramKvCache, dramBlockTable,
                     topkSourceIds, topkMissCounts,
                     missSourceIds, missDstSlots, missCounts,
+                    prefetchMap, prefetchKv, prefetchRope, prefetchOwners,
                     attentionOut, attentionWorkspace, fusedTiling,
                     tiling, &pipe);
             } else {
@@ -217,6 +248,7 @@ extern "C" __global__ __aicore__ void fused_scatter_copy_sparse_flash_attention(
                     dramKeyRope, dramKvCache, dramBlockTable,
                     topkSourceIds, topkMissCounts,
                     missSourceIds, missDstSlots, missCounts,
+                    prefetchMap, prefetchKv, prefetchRope, prefetchOwners,
                     attentionOut, attentionWorkspace, fusedTiling,
                     tiling, &pipe);
             }

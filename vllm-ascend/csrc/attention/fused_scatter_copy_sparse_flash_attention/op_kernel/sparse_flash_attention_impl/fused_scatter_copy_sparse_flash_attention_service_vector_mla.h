@@ -112,6 +112,46 @@ public:
         int64_t &mte2Size, int64_t mte3Size, int64_t mergeMte3Idx,
         int64_t realS2Idx1, int64_t realS2Idx2, int64_t s2IdLimit,
         const RunInfo &runInfo);
+    __aicore__ inline void InitPrefetchGather(
+        __gm__ uint8_t *map, __gm__ uint8_t *kv, __gm__ uint8_t *rope,
+        __gm__ uint8_t *owners, __gm__ uint8_t *queryEnds,
+        uint32_t sourceCapacity, uint32_t capacity, uint32_t ownerStride)
+    {
+        prefetchMap_.SetGlobalBuffer((__gm__ int32_t *)map);
+        prefetchKv_.SetGlobalBuffer((__gm__ KV_T *)kv);
+        prefetchRope_.SetGlobalBuffer((__gm__ KV_T *)rope);
+        prefetchOwners_.SetGlobalBuffer((__gm__ int32_t *)owners);
+        prefetchEnds_.SetGlobalBuffer((__gm__ int32_t *)queryEnds);
+        prefetchSourceCapacity_ = sourceCapacity;
+        prefetchCapacity_ = capacity;
+        prefetchOwnerStride_ = ownerStride;
+    }
+    __aicore__ inline int64_t PrefetchRow(int32_t source, const RunInfo &info)
+    {
+        if (prefetchCapacity_ == 0 || source < 0 ||
+            static_cast<uint32_t>(source) >= prefetchSourceCapacity_) return -1;
+        if (prefetchBatch_ != static_cast<int32_t>(info.bIdx)) {
+            prefetchBatch_ = static_cast<int32_t>(info.bIdx);
+            prefetchBegin_ = info.bIdx == 0 ? 0 : prefetchEnds_.GetValue(info.bIdx - 1);
+            prefetchEnd_ = prefetchEnds_.GetValue(info.bIdx);
+        }
+        const int32_t tag = prefetchMap_.GetValue(
+            static_cast<uint64_t>(prefetchBegin_) * prefetchSourceCapacity_ + source);
+        const int64_t index = static_cast<int64_t>(tag) - 2;
+        if (tag >= 2 && index >= static_cast<int64_t>(prefetchBegin_) * prefetchCapacity_ &&
+            index < static_cast<int64_t>(prefetchEnd_) * prefetchCapacity_) return index;
+        return -1;
+    }
+    __aicore__ inline bool OwnsPersistentCopy(int64_t slot, const RunInfo &info)
+    {
+        if (prefetchCapacity_ == 0) return true;
+        if (slot < 0 || static_cast<uint64_t>(slot) >= prefetchOwnerStride_) return false;
+        const int32_t q = static_cast<int32_t>(info.topKBaseOffset / SFA_OFFLOAD_SPARSE_INDICES_CAPACITY);
+        // Head groups may reuse a query's tokens. Only its first head group
+        // writes the persistent cache; all groups read the stable source.
+        return prefetchOwners_.GetValue(static_cast<uint64_t>(info.bIdx) * prefetchOwnerStride_ + slot) == q &&
+            info.gS1Idx % constInfo.gSize == 0;
+    }
     __aicore__ inline void CopyInDramKv(
         int64_t &mte2Size, int64_t mte3Size, int64_t mergeMte3Idx,
         int64_t sourceTokenIdx,
@@ -290,6 +330,10 @@ private:
     GlobalTensor<KV_T> dramKeyGm_;
     GlobalTensor<int32_t> dramBlockTableGm_;
     GlobalTensor<int32_t> sourceTokenIdsGm_;
+    GlobalTensor<int32_t> prefetchMap_, prefetchOwners_, prefetchEnds_;
+    GlobalTensor<KV_T> prefetchKv_, prefetchRope_;
+    uint32_t prefetchSourceCapacity_ = 0, prefetchCapacity_ = 0, prefetchOwnerStride_ = 0;
+    int32_t prefetchBatch_ = -1, prefetchBegin_ = 0, prefetchEnd_ = 0;
     GlobalTensor<int32_t> copyCountsGm_;
     uint32_t copyCap_ = 0;
     uint32_t dramMaxBlockNum_ = 0;
@@ -1183,6 +1227,23 @@ __aicore__ inline void SFAVectorService<SFAT>::CopyInDramKv(
     ASSERT_MSG(
         constInfo.sparseBlockSize == 1,
         "source-aware gather requires sparse_block_size=1.");
+    // Read a completed staging row directly into the existing gather bank.
+    // The ordinary miss writeback then commits that same UB data to its slot.
+    const int64_t stagingRow = PrefetchRow(static_cast<int32_t>(sourceTokenIdx), runInfo);
+    if (stagingRow >= 0) {
+        const int64_t ubRow = mte2Size - mte3Size;
+        DataCopyExtParams params{1, static_cast<uint32_t>(constInfo.headDim * sizeof(KV_T)), 0, 0, 0};
+        DataCopyPadExtParams<KV_T> pad;
+        DataCopyPad(kvMergUb_[mergeMte3Idx % SFA_GATHER_UB_BANK_COUNT * SFA_GATHER_CKV_UB_BANK_ELEMENTS +
+                             ubRow * constInfo.headDim],
+                    prefetchKv_[stagingRow * constInfo.headDim], params, pad);
+        params.blockLen = constInfo.headDimRope * sizeof(KV_T);
+        DataCopyPad(ropeMergUb_[mergeMte3Idx % SFA_GATHER_UB_BANK_COUNT * SFA_GATHER_KPE_UB_BANK_ELEMENTS +
+                               ubRow * constInfo.headDimRope],
+                    prefetchRope_[stagingRow * constInfo.headDimRope], params, pad);
+        ++mte2Size;
+        return;
+    }
     const int64_t dramOffset =
         GetDramKeyGmOffset(sourceTokenIdx, runInfo);
     if (dramOffset < 0) {
@@ -1281,8 +1342,8 @@ SFAVectorService<SFAT>::CopyInSourceAwareKvPair(
     const bool swapPair = canUseHbmPairOrder && keyOffset1 < keyOffset0;
 
     if (swapPair) {
-        persistentOffset0 = source1FromDram ? keyOffset1 : -1;
-        persistentOffset1 = source0FromDram ? keyOffset0 : -1;
+        persistentOffset0 = source1FromDram && OwnsPersistentCopy(destinationSlot1, runInfo) ? keyOffset1 : -1;
+        persistentOffset1 = source0FromDram && OwnsPersistentCopy(destinationSlot0, runInfo) ? keyOffset0 : -1;
         if (source1FromDram) {
             CopyInDramKv(
                 mte2Size, mte3Size, mergeMte3Idx,
@@ -1306,8 +1367,8 @@ SFAVectorService<SFAT>::CopyInSourceAwareKvPair(
         return;
     }
 
-    persistentOffset0 = source0FromDram ? keyOffset0 : -1;
-    persistentOffset1 = source1FromDram ? keyOffset1 : -1;
+    persistentOffset0 = source0FromDram && OwnsPersistentCopy(destinationSlot0, runInfo) ? keyOffset0 : -1;
+    persistentOffset1 = source1FromDram && OwnsPersistentCopy(destinationSlot1, runInfo) ? keyOffset1 : -1;
     if (source0FromDram) {
         CopyInDramKv(
             mte2Size, mte3Size, mergeMte3Idx,

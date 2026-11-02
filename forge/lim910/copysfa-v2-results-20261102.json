@@ -1,0 +1,220 @@
+{
+  "status": "completed",
+  "scope": "single fused operator profiles; no end-to-end/model speedup claim",
+  "batch": 24,
+  "mtp": 3,
+  "context_tokens": 143360,
+  "hot_tokens": 8192,
+  "dtype": "bfloat16",
+  "physical_device": 7,
+  "rows": [
+    {
+      "scenario": "miss400",
+      "variant": "baseline",
+      "operator": "lim",
+      "kernel_profile_mean_us": 2105.6306363636363,
+      "event_median_us": 2111.930012702942,
+      "profile_calls": 11,
+      "trace_directory": "baseline_lim",
+      "scope": "single LIM graph including ready/count/source reset"
+    },
+    {
+      "scenario": "miss400",
+      "variant": "baseline",
+      "operator": "copysfa",
+      "kernel_profile_mean_us": 413.439,
+      "event_median_us": 421.6199964284897,
+      "profile_calls": 11,
+      "trace_directory": "baseline_copysfa",
+      "scope": "single CopySFA graph; LIM and prefetch completed outside timing"
+    },
+    {
+      "scenario": "miss400",
+      "variant": "prefetch",
+      "operator": "lim",
+      "kernel_profile_mean_us": 2956.7155454545455,
+      "event_median_us": 2980.039954185486,
+      "profile_calls": 11,
+      "trace_directory": "prefetch_lim",
+      "scope": "single LIM graph including ready/count/source reset"
+    },
+    {
+      "scenario": "miss400",
+      "variant": "prefetch",
+      "operator": "copysfa",
+      "kernel_profile_mean_us": 540.1036363636364,
+      "event_median_us": 546.5500056743622,
+      "profile_calls": 11,
+      "trace_directory": "prefetch_copysfa",
+      "scope": "single CopySFA graph; LIM and prefetch completed outside timing"
+    },
+    {
+      "scenario": "all_hit",
+      "variant": "baseline",
+      "operator": "lim",
+      "kernel_profile_mean_us": 1651.1833636363635,
+      "event_median_us": 1660.4999899864197,
+      "profile_calls": 11,
+      "trace_directory": "all_hit/baseline_lim",
+      "scope": "single LIM graph including ready/count/source reset"
+    },
+    {
+      "scenario": "all_hit",
+      "variant": "baseline",
+      "operator": "copysfa",
+      "kernel_profile_mean_us": 413.8607272727273,
+      "event_median_us": 426.04999244213104,
+      "profile_calls": 11,
+      "trace_directory": "all_hit/baseline_copysfa",
+      "scope": "single CopySFA graph; LIM and prefetch completed outside timing"
+    },
+    {
+      "scenario": "all_hit",
+      "variant": "prefetch",
+      "operator": "lim",
+      "kernel_profile_mean_us": 2494.2996363636366,
+      "event_median_us": 2519.6999311447144,
+      "profile_calls": 11,
+      "trace_directory": "all_hit/prefetch_lim",
+      "scope": "single LIM graph including ready/count/source reset"
+    },
+    {
+      "scenario": "all_hit",
+      "variant": "prefetch",
+      "operator": "copysfa",
+      "kernel_profile_mean_us": 421.8150909090909,
+      "event_median_us": 430.309996008873,
+      "profile_calls": 11,
+      "trace_directory": "all_hit/prefetch_copysfa",
+      "scope": "single CopySFA graph; LIM and prefetch completed outside timing"
+    }
+  ],
+  "validation": {
+    "miss400_baseline": {
+      "attention_reference": true,
+      "dynamic_graph_checks": [],
+      "staging_source_check": null,
+      "actual_prefetched_tokens": 0
+    },
+    "miss400_prefetch": {
+      "attention_reference": true,
+      "dynamic_graph_checks": [
+        {
+          "scenario": "changed-query",
+          "copied": 6144,
+          "unique_useful": 69
+        },
+        {
+          "scenario": "shorter-length-budget-7",
+          "copied": 672,
+          "unique_useful": 8
+        },
+        {
+          "scenario": "zero-budget",
+          "copied": 0,
+          "unique_useful": 0
+        },
+        {
+          "scenario": "duplicate-candidates-across-routes",
+          "copied": 6144,
+          "unique_useful": 3
+        },
+        {
+          "scenario": "mixed-first-fill",
+          "copied": 5888,
+          "unique_useful": 3
+        },
+        {
+          "scenario": "steady-again",
+          "copied": 6144,
+          "unique_useful": 6
+        },
+        {
+          "scenario": "persistent-all-hit",
+          "remaining_misses": 0
+        }
+      ],
+      "staging_source_check": "passed: poisoned staged Host tokens after LIM; exact KV/KPE retained",
+      "actual_prefetched_tokens": 6144
+    },
+    "all_hit_baseline": {
+      "attention_reference": true,
+      "dynamic_graph_checks": [],
+      "staging_source_check": null,
+      "actual_prefetched_tokens": 0
+    },
+    "all_hit_prefetch": {
+      "attention_reference": true,
+      "dynamic_graph_checks": [
+        {
+          "scenario": "changed-query",
+          "copied": 6144,
+          "unique_useful": 68
+        },
+        {
+          "scenario": "shorter-length-budget-7",
+          "copied": 672,
+          "unique_useful": 8
+        },
+        {
+          "scenario": "zero-budget",
+          "copied": 0,
+          "unique_useful": 0
+        },
+        {
+          "scenario": "duplicate-candidates-across-routes",
+          "copied": 6144,
+          "unique_useful": 0
+        },
+        {
+          "scenario": "mixed-first-fill",
+          "copied": 5888,
+          "unique_useful": 0
+        },
+        {
+          "scenario": "steady-again",
+          "copied": 6144,
+          "unique_useful": 0
+        },
+        {
+          "scenario": "persistent-all-hit",
+          "remaining_misses": 0
+        }
+      ],
+      "staging_source_check": null,
+      "actual_prefetched_tokens": 0
+    }
+  },
+  "source_sha256": {
+    "README.md": "c864b0cc4241ae7332a7bbc3ae9c314b5c3298e7156e49217759816c2c79edc9",
+    "scripts/collect-echo-prefetch-profile-npu.py": "28bb5d6be635d56cb6326bb1419ebf1bcf8b3c1f8d950f8aad00d299ab9458be",
+    "scripts/echo_indexer_prefetch.py": "18ed46932b176b339dbf03a7da4192dde31c927ba599f6ebf564095569451738",
+    "vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/echo_indexer_prefetch.h": "cdc835e83b371abac2f137620e83680b7a47eb06c2d619570163e363ade198ec",
+    "vllm-ascend/csrc/attention/fused_lightning_indexer_manage/op_kernel/fused_lightning_indexer_manage.cpp": "83c8e107a44a27d66902e47f463b0aa4d6884b282636f6afabcccad5154174ce",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/fused_scatter_copy_sparse_flash_attention_torch_adpt.h": "4b1d31d15d7595040b909ecccdde7e42779bd2f6863a17b47f55bd49d229ee9c",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_host/fused_scatter_copy_sparse_flash_attention_def.cpp": "94d788c732089e9dbe04d4994b2155af170ce831f1481530f6c10e655771e33d",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_host/fused_scatter_copy_sparse_flash_attention_tiling.cpp": "906acf0b169f6d660da4cb72e278c2c1bbc3f73ce2289b44f346eaa0c86cce49",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_host/fused_scatter_copy_sparse_flash_attention_tiling.h": "fd988ae12ebfbb12d0ddf445af23232d5e904866ee348e618dfc38d7454ee3c5",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_host/op_api/aclnn_fused_scatter_copy_sparse_flash_attention.cpp": "db13005e09f5d5916199fecb731d4cda42d22f625e357347399f0185eb19c221",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_host/op_api/aclnn_fused_scatter_copy_sparse_flash_attention.h": "a2cebff47da4389827c8dadd8d78130155899e91847a9c7e2f822ac608e08e02",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_kernel/fused_scatter_copy_sparse_flash_attention.cpp": "984877eebbe908ee7109d9bdb15e376bef7ddf029354af44b24cc670f3ed3f34",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_kernel/sparse_flash_attention_impl/fused_scatter_copy_sparse_flash_attention_kernel_mla.h": "765d1ca71a38be2430926c327b659f9000eb4883531273d31ca9c4cc73842615",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_kernel/sparse_flash_attention_impl/fused_scatter_copy_sparse_flash_attention_service_vector_mla.h": "8fea1d67f41e66bd4c5fc858a7b6255deaf61f4f3d24732fc5eac95853b0cf4d",
+    "vllm-ascend/csrc/torch_binding.cpp": "dbb30ec99fe21cd4af3af65fc4e738c3b6c5af0d48b547451331241372f66658",
+    "vllm-ascend/csrc/torch_binding_meta.cpp": "7c1e2463817f836fd5ba3c22b920407e77d5c2c0d434ce404a34c2e6ce5d3301",
+    "vllm-ascend/csrc/attention/fused_scatter_copy_sparse_flash_attention/op_kernel/prefetch_copy_owners.h": "2876b04bad356f96294bc9fa0802d762a04baa57f261ee8674be0889d7f01007"
+  },
+  "binary_sha256": {
+    "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_7f8960c3ee26b05b7ecde16e6c675fa5_relocatable.o": "288a44422a8848b3aca9d2691f3db5f51c6f125a07f5d7989d79414731db4ac2",
+    "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_c3f5aa895b7650260ea9e5b5ab2cbc94.o": "995edf8e7586f47389ba654554b2a258afeac9d9e077953e4da0d6d6a28080c9",
+    "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_c3f5aa895b7650260ea9e5b5ab2cbc94_relocatable.o": "9cb9669b88ec70691a6f07ceea77caa604baef1479803b6562d75b8561eb544c",
+    "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_scatter_copy_sparse_flash_attention/FusedScatterCopySparseFlashAttention_7f8960c3ee26b05b7ecde16e6c675fa5.o": "778a4c90e3bf39e524b5f3f8d493163b777001ea5ecaa78985251d796a5f4fa4",
+    "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_3ab77f361fbee6ce06ad3c6a88651550.o": "8bde1b514c9ef7b4853e3041e2f6fc391adef99f6cf8737c7dfdf6324dafc69d",
+    "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_49b4a6827615c395fa34fea50d712121_relocatable.o": "7e7e0feea2bf9cea3e63bf65711b0ca8dc5ec2f3590bf9e252fd0409fab2db29",
+    "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_49b4a6827615c395fa34fea50d712121.o": "1bbb6c8754caa3c1c56059ca4ae52029e0451ad5b3ded415c61ce51072c69c26",
+    "vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/kernel/ascend910_93/fused_lightning_indexer_manage/FusedLightningIndexerManage_3ab77f361fbee6ce06ad3c6a88651550_relocatable.o": "e56b02362d4e88c92fea58c473b208955bf692569167d8c799b5cf92edf010a2",
+    "vllm-ascend/vllm_ascend/vllm_ascend_C.cpython-311-aarch64-linux-gnu.so": "be67db0d54ae1531d16617a9531c5f854bc742509bec89a6b295e635f4dbcc51"
+  },
+  "discarded_performance_run": "all_hit_140k: device6 concurrently occupied by another process",
+  "removed_consumer_kernels": 20
+}

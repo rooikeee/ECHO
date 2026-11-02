@@ -19,7 +19,9 @@ aclnnStatus aclnnFusedScatterCopySparseFlashAttentionGetWorkspaceSize(
     const aclTensor *dramKvCache, const aclTensor *dramBlockTable,
     const aclTensor *topkSourceIds, const aclTensor *topkMissCounts,
     const aclTensor *missSourceIds, const aclTensor *missDstSlots,
-    const aclTensor *missCounts, double scaleValue, int64_t sparseBlockSize,
+    const aclTensor *missCounts, const aclTensor *prefetchMap,
+    const aclTensor *prefetchKv, const aclTensor *prefetchRope,
+    double scaleValue, int64_t sparseBlockSize,
     char *layoutQuery, char *layoutKv, int64_t sparseMode,
     const aclTensor *attentionOut, uint64_t *workspaceSize,
     aclOpExecutor **executor);

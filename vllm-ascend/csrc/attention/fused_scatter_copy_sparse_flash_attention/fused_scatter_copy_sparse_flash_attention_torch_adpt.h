@@ -28,7 +28,10 @@ inline void npu_fused_scatter_copy_sparse_flash_attention(
     const at::Tensor& dram_k_rope,
     const at::Tensor& dram_kv_cache,
     double scale_value,
-    at::Tensor attention_out) {
+    at::Tensor attention_out,
+    const c10::optional<at::Tensor>& prefetch_map,
+    const c10::optional<at::Tensor>& prefetch_kv,
+    const c10::optional<at::Tensor>& prefetch_rope) {
   constexpr int64_t kBlockSize = 128;
   constexpr int64_t kMaxQueryCount = 16;
   constexpr int64_t kTopK = 2048;
@@ -158,6 +161,28 @@ inline void npu_fused_scatter_copy_sparse_flash_attention(
                 "DRAM sources must be contiguous.");
   }
 
+  const bool use_prefetch = prefetch_map.has_value();
+  TORCH_CHECK(use_prefetch == prefetch_kv.has_value() && use_prefetch == prefetch_rope.has_value(),
+              "prefetch_map, prefetch_kv and prefetch_rope must be supplied together.");
+  if (use_prefetch) {
+    const auto& map = *prefetch_map;
+    const auto& kv = *prefetch_kv;
+    const auto& rope = *prefetch_rope;
+    TORCH_CHECK(map.dim() == 2 && map.size(0) == query.size(0) && map.size(1) > 0 &&
+                    map.scalar_type() == at::kInt,
+                "prefetch_map must be int32 [T, source_capacity].");
+    TORCH_CHECK(kv.dim() == 3 && kv.size(0) == query.size(0) && kv.size(1) > 0 &&
+                    kv.size(1) <= 2048 && kv.size(2) == kCkvDim &&
+                    rope.dim() == 3 && rope.size(0) == kv.size(0) &&
+                    rope.size(1) == kv.size(1) && rope.size(2) == kKpeDim &&
+                    kv.scalar_type() == dtype && rope.scalar_type() == dtype,
+                "Prefetch CKV/KPE must be matching [T,P,512/64], 1<=P<=2048.");
+    for (const at::Tensor* tensor : {&map, &kv, &rope}) {
+      TORCH_CHECK(tensor->device() == device && tensor->is_contiguous(),
+                  "Prefetch tensors must be contiguous on the query NPU.");
+    }
+  }
+
   std::string query_layout = "TND";
   std::string kv_layout = "PA_BSND";
   char* query_layout_ptr = const_cast<char*>(query_layout.c_str());
@@ -184,6 +209,9 @@ inline void npu_fused_scatter_copy_sparse_flash_attention(
       miss_src_ids,
       miss_dst_slots,
       miss_counts,
+      prefetch_map,
+      prefetch_kv,
+      prefetch_rope,
       scale_value,
       kSparseBlockSize,
       query_layout_ptr,

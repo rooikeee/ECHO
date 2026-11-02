@@ -10,7 +10,8 @@ extern aclnnStatus aclnnInnerFusedScatterCopySparseFlashAttentionGetWorkspaceSiz
     const aclTensor *, const aclTensor *, const aclTensor *, const aclTensor *,
     const aclTensor *, const aclTensor *, const aclTensor *, const aclTensor *,
     const aclTensor *, const aclTensor *, const aclTensor *, const aclTensor *,
-    const aclTensor *, const aclTensor *, double, int64_t, char *, char *,
+    const aclTensor *, const aclTensor *, const aclTensor *, const aclTensor *,
+    const aclTensor *, double, int64_t, char *, char *,
     int64_t, const aclTensor *, uint64_t *, aclOpExecutor **);
 extern aclnnStatus aclnnInnerFusedScatterCopySparseFlashAttention(
     void *, uint64_t, aclOpExecutor *, const aclrtStream);
@@ -24,7 +25,9 @@ aclnnStatus aclnnFusedScatterCopySparseFlashAttentionGetWorkspaceSize(
     const aclTensor *dramKvCache, const aclTensor *dramBlockTable,
     const aclTensor *topkSourceIds, const aclTensor *topkMissCounts,
     const aclTensor *missSourceIds, const aclTensor *missDstSlots,
-    const aclTensor *missCounts, double scaleValue, int64_t sparseBlockSize,
+    const aclTensor *missCounts, const aclTensor *prefetchMap,
+    const aclTensor *prefetchKv, const aclTensor *prefetchRope,
+    double scaleValue, int64_t sparseBlockSize,
     char *layoutQuery, char *layoutKv, int64_t sparseMode,
     const aclTensor *attentionOut, uint64_t *workspaceSize,
     aclOpExecutor **executor)
@@ -33,7 +36,8 @@ aclnnStatus aclnnFusedScatterCopySparseFlashAttentionGetWorkspaceSize(
         query, key, value, sparseIndices, cacheTokens, hbmBlockTable,
         actualSeqLengthsQuery, actualSeqLengthsKv, queryRope, hbmKeyRope,
         dramKeyRope, dramKvCache, dramBlockTable, topkSourceIds,
-        topkMissCounts, missSourceIds, missDstSlots, missCounts, scaleValue,
+        topkMissCounts, missSourceIds, missDstSlots, missCounts,
+        prefetchMap, prefetchKv, prefetchRope, scaleValue,
         sparseBlockSize, layoutQuery, layoutKv, sparseMode, attentionOut,
         workspaceSize, executor);
 }

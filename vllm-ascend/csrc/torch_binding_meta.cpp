@@ -538,7 +538,8 @@ void npu_fused_scatter_copy_sparse_flash_attention_meta(
     const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&,
     const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&,
     const at::Tensor&, at::Tensor, at::Tensor, const at::Tensor&,
-    const at::Tensor&, double, at::Tensor)
+    const at::Tensor&, double, at::Tensor, const c10::optional<at::Tensor>&,
+    const c10::optional<at::Tensor>&, const c10::optional<at::Tensor>&)
 {
 }
 
