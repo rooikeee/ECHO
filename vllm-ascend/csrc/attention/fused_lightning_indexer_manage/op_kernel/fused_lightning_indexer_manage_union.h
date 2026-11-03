@@ -210,14 +210,219 @@ public:
                          OCCURRENCE_CAPACITY * sizeof(uint32_t));
     }
 
+    __aicore__ inline void InitPrefetchRoutes(GM_ADDR context)
+    {
+        if (context == nullptr) return;
+        prefetchContextGm.SetGlobalBuffer((__gm__ int64_t *)context);
+        // Private descriptor field12: low32 capacity, bit32 compact routes.
+        // Its ready allocation owns [T,sourceCapacity] followed by [T,TOPK].
+        // Existing positive capacities keep the original descriptor behavior.
+        constexpr uint64_t COMPACT_ROUTES_FLAG = 1ULL << 32U;
+        packedRoutesEnabled = (static_cast<uint64_t>(prefetchContextGm.GetValue(12U)) &
+                               COMPACT_ROUTES_FLAG) != 0U;
+        if (packedRoutesEnabled) {
+            auto ready = (__gm__ uint32_t *)prefetchContextGm.GetValue(5U);
+            prefetchRoutesGm.SetGlobalBuffer(ready + static_cast<uint64_t>(tSize) * sourceCapacity);
+        }
+    }
+
     __aicore__ inline void Process(uint32_t first, uint32_t stride)
     {
         for (uint32_t batch = first; batch < batchSize; batch += stride) {
+            packedRoutesPublished = false;
             ProcessBatch(batch);
+            if (packedRoutesEnabled && !packedRoutesPublished &&
+                requestStateGm.GetValue(batch) == LIMConfig::REQUEST_STATE_STEADY) {
+                PublishPrefetchRoutesFallback(batch);
+            }
         }
     }
 
 private:
+    static constexpr uint32_t PREFETCH_NON_OWNER = 0x80000000U;
+
+    __aicore__ inline uint32_t StagingTag(uint32_t queryStart, int32_t source)
+    {
+        if (source < 0 || static_cast<uint32_t>(source) >= sourceCapacity) return 0U;
+        GlobalTensor<int32_t> map;
+        map.SetGlobalBuffer((__gm__ int32_t *)prefetchContextGm.GetValue(queryStart * 14U + 5U));
+        const int32_t tag = map.GetValue(static_cast<uint64_t>(queryStart) * sourceCapacity + source);
+        // Ready values 0/1 have no staging payload. Packed routes use 0 for
+        // Host and 1+global staging row for HBM; bit31 suppresses duplicate writes.
+        return tag >= 2 ? static_cast<uint32_t>(tag - 1) : 0U;
+    }
+
+    __aicore__ inline void PublishPrefetchOccurrences(
+        uint32_t queryStart, uint32_t routeCount, uint32_t total, uint32_t unionCount,
+        LocalTensor<uint32_t> occurrences, LocalTensor<int32_t> unionSources,
+        LocalTensor<int32_t> scratch, const uint32_t *lengths)
+    {
+        if (!packedRoutesEnabled) return;
+        // Occurrence publication already bounds the union to 4096, leaving
+        // the upper half of unionSourceBuf free after eviction. Join the
+        // bounded candidate lists against sorted UB sources instead of doing
+        // one random GM readiness lookup per miss.
+        auto tags = unionSources[OCCURRENCE_FAST_CAPACITY].ReinterpretCast<uint32_t>();
+        const uint32_t alignedCount = (unionCount + 63U) / 64U * 64U;
+        if (alignedCount > 0U) Duplicate(tags, 0U, alignedCount);
+        Sync<HardEvent::V_S>(HardEvent::V_S);
+        GlobalTensor<int32_t> counts, prefetched;
+        const uint32_t base = queryStart * 14U;
+        counts.SetGlobalBuffer((__gm__ int32_t *)prefetchContextGm.GetValue(base + 2U));
+        prefetched.SetGlobalBuffer((__gm__ int32_t *)prefetchContextGm.GetValue(base + 3U));
+        const uint32_t capacity = static_cast<uint32_t>(prefetchContextGm.GetValue(base + 12U));
+        for (uint32_t remaining = routeCount; remaining > 0U; --remaining) {
+            const uint32_t q = queryStart + remaining - 1U;
+            const int32_t count = counts.GetValue(q);
+            if (count <= 0 || static_cast<uint32_t>(count) > capacity || capacity > TOPK) continue;
+            Sync<HardEvent::S_MTE2>(HardEvent::S_MTE2);
+            DataCopyPad(scratch, prefetched[static_cast<uint64_t>(q) * capacity],
+                        DataCopyExtParams{1, static_cast<uint32_t>(count) * 4U, 0, 0, 0},
+                        DataCopyPadExtParams<int32_t>{false, 0, 0, 0});
+            Sync<HardEvent::MTE2_S>(HardEvent::MTE2_S);
+            for (int32_t p = 0; p < count; ++p) {
+                const int32_t source = scratch.GetValue(p);
+                uint32_t lo = 0U, hi = unionCount;
+                while (lo < hi) {
+                    const uint32_t mid = (lo + hi) / 2U;
+                    if (unionSources.GetValue(mid) < source) lo = mid + 1U;
+                    else hi = mid;
+                }
+                if (lo < unionCount && unionSources.GetValue(lo) == source)
+                    tags.SetValue(lo, q * capacity + static_cast<uint32_t>(p) + 1U);
+            }
+        }
+        uint32_t previous = UINT32_MAX;
+        uint32_t staging = 0U;
+        for (uint32_t i = 0U; i < total; ++i) {
+            const uint32_t item = occurrences.GetValue(i);
+            const uint32_t index = item >> OCCURRENCE_UNION_SHIFT;
+            const uint32_t route = (item >> ROUTE_POSITION_BITS) & OCCURRENCE_ROUTE_MASK;
+            const uint32_t position = item & ROUTE_POSITION_MASK;
+            const bool owner = index != previous;
+            if (owner) {
+                staging = index < unionCount ? tags.GetValue(index) : 0U;
+                previous = index;
+            }
+            scratch.ReinterpretCast<uint32_t>().SetValue(route * TOPK + position,
+                staging | (owner ? 0U : PREFETCH_NON_OWNER));
+        }
+        Sync<HardEvent::S_MTE3>(HardEvent::S_MTE3);
+        for (uint32_t route = 0; route < routeCount; ++route) {
+            if (lengths[route] == 0U) continue;
+            DataCopyPad(prefetchRoutesGm[static_cast<uint64_t>(queryStart + route) * TOPK],
+                        scratch.ReinterpretCast<uint32_t>()[route * TOPK],
+                        DataCopyExtParams{1, lengths[route] * 4U, 0, 0, 0});
+        }
+        Sync<HardEvent::MTE3_S>(HardEvent::MTE3_S);
+        packedRoutesPublished = true;
+    }
+
+    // A four-query miss union still fits UB when its occurrence list exceeds
+    // 4096. Join one source-sorted query prefix at a time and retain ownership
+    // in the union tag array, avoiding repeated scalar GM binary searches.
+    __aicore__ inline void PublishPrefetchRoutesFromUnion(
+        uint32_t batch, uint32_t start, uint32_t end, uint32_t unionCount)
+    {
+        auto sources = unionSourceBuf.Get<int32_t>();
+        auto tags = pairOutBuf.Get<uint32_t>();
+        auto row = pairInBuf.Get<int32_t>();
+        auto output = row[TOPK].ReinterpretCast<uint32_t>();
+        Sync<HardEvent::MTE3_MTE2>(HardEvent::MTE3_MTE2);
+        DataCopyPad(sources, missSourcesGm[static_cast<uint64_t>(batch) * MISS_CAPACITY],
+                    DataCopyExtParams{1, unionCount * 4U, 0, 0, 0},
+                    DataCopyPadExtParams<int32_t>{false, 0, 0, 0});
+        Duplicate(tags, 0U, (unionCount + 63U) / 64U * 64U);
+        Sync<HardEvent::MTE2_S>(HardEvent::MTE2_S);
+        Sync<HardEvent::V_S>(HardEvent::V_S);
+        GlobalTensor<int32_t> counts, prefetched;
+        const uint32_t base = start * 14U;
+        counts.SetGlobalBuffer((__gm__ int32_t *)prefetchContextGm.GetValue(base + 2U));
+        prefetched.SetGlobalBuffer((__gm__ int32_t *)prefetchContextGm.GetValue(base + 3U));
+        const uint32_t capacity = static_cast<uint32_t>(prefetchContextGm.GetValue(base + 12U));
+        for (uint32_t q = end; q > start;) {
+            --q;
+            const int32_t count = counts.GetValue(q);
+            if (count <= 0 || static_cast<uint32_t>(count) > capacity || capacity > TOPK) continue;
+            Sync<HardEvent::S_MTE2>(HardEvent::S_MTE2);
+            DataCopyPad(row, prefetched[static_cast<uint64_t>(q) * capacity],
+                        DataCopyExtParams{1, static_cast<uint32_t>(count) * 4U, 0, 0, 0},
+                        DataCopyPadExtParams<int32_t>{false, 0, 0, 0});
+            Sync<HardEvent::MTE2_S>(HardEvent::MTE2_S);
+            for (int32_t p = 0; p < count; ++p) {
+                const int32_t source = row.GetValue(p);
+                uint32_t lo = 0U, hi = unionCount;
+                while (lo < hi) {
+                    const uint32_t mid = (lo + hi) / 2U;
+                    if (sources.GetValue(mid) < source) lo = mid + 1U;
+                    else hi = mid;
+                }
+                if (lo < unionCount && sources.GetValue(lo) == source)
+                    tags.SetValue(lo, q * capacity + static_cast<uint32_t>(p) + 1U);
+            }
+        }
+        for (uint32_t q = start; q < end; ++q) {
+            const int32_t count = topkMissCountsGm.GetValue(q);
+            if (count <= 0 || count > static_cast<int32_t>(TOPK)) continue;
+            Sync<HardEvent::S_MTE2>(HardEvent::S_MTE2);
+            DataCopyPad(row, topkSourcesGm[static_cast<uint64_t>(q) * TOPK],
+                        DataCopyExtParams{1, static_cast<uint32_t>(count) * 4U, 0, 0, 0},
+                        DataCopyPadExtParams<int32_t>{false, 0, 0, 0});
+            Sync<HardEvent::MTE2_S>(HardEvent::MTE2_S);
+            uint32_t cursor = 0U;
+            for (int32_t p = 0; p < count; ++p) {
+                const int32_t source = row.GetValue(p);
+                while (cursor < unionCount && sources.GetValue(cursor) < source) ++cursor;
+                const bool found = cursor < unionCount && sources.GetValue(cursor) == source;
+                const uint32_t tag = found ? tags.GetValue(cursor) : 0U;
+                output.SetValue(p, tag);
+                if (found) tags.SetValue(cursor, tag | PREFETCH_NON_OWNER);
+            }
+            Sync<HardEvent::S_MTE3>(HardEvent::S_MTE3);
+            DataCopyPad(prefetchRoutesGm[static_cast<uint64_t>(q) * TOPK], output,
+                        DataCopyExtParams{1, static_cast<uint32_t>(count) * 4U, 0, 0, 0});
+            Sync<HardEvent::MTE3_S>(HardEvent::MTE3_S);
+        }
+    }
+
+    // Wider unions retain the original bounded GM join as a compatibility
+    // fallback. MTP3 always fits the UB union path above.
+    __aicore__ inline void PublishPrefetchRoutesFallback(uint32_t batch)
+    {
+        const uint32_t start = batch == 0U ? 0U : actualSeqLengthsQueryGm.GetValue(batch - 1U);
+        const uint32_t end = actualSeqLengthsQueryGm.GetValue(batch);
+        if (end <= start || end > tSize || end - start > MAX_ROUTES) return;
+        const int32_t unionCount = countsGm.GetValue(batch);
+        if (unionCount > 0 && unionCount <= static_cast<int32_t>(CAPACITY)) {
+            PublishPrefetchRoutesFromUnion(batch, start, end, static_cast<uint32_t>(unionCount));
+            return;
+        }
+        for (uint32_t q = start; q < end; ++q) {
+            const int32_t count = topkMissCountsGm.GetValue(q);
+            if (count <= 0 || count > static_cast<int32_t>(TOPK)) continue;
+            for (int32_t i = 0; i < count; ++i) {
+                const int32_t source = topkSourcesGm.GetValue(static_cast<uint64_t>(q) * TOPK + i);
+                bool owner = true;
+                for (uint32_t earlier = start; earlier < q && owner; ++earlier) {
+                    const int32_t earlierCount = topkMissCountsGm.GetValue(earlier);
+                    uint32_t lo = 0, hi = earlierCount > 0 && earlierCount <= static_cast<int32_t>(TOPK)
+                        ? static_cast<uint32_t>(earlierCount) : 0U;
+                    const uint32_t limit = hi;
+                    while (lo < hi) {
+                        const uint32_t mid = (lo + hi) / 2U;
+                        if (topkSourcesGm.GetValue(static_cast<uint64_t>(earlier) * TOPK + mid) < source) lo = mid + 1U;
+                        else hi = mid;
+                    }
+                    owner = lo == limit || topkSourcesGm.GetValue(static_cast<uint64_t>(earlier) * TOPK + lo) != source;
+                }
+                prefetchRoutesGm.SetValue(static_cast<uint64_t>(q) * TOPK + i,
+                    StagingTag(start, source) | (owner ? 0U : PREFETCH_NON_OWNER));
+            }
+        }
+        DataCacheCleanAndInvalid<uint32_t, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(prefetchRoutesGm);
+    }
+
     // Match the mature Q=4 publication scheme: every request owner uses MTE3
     // to write its disjoint count cells directly.  This avoids scalar-cache
     // line sharing and removes the kernel-wide post-union finalizer.
@@ -1289,6 +1494,8 @@ private:
         LocalTensor<int32_t> topkDestinationRows = routeSources;
         bool topkDestinationsPublished = false;
         if (capturedOccurrences) {
+            PublishPrefetchOccurrences(queryStart, routeCount, total, updated, occurrences, unionSources,
+                                       input.ReinterpretCast<int32_t>(), lengths);
             // unionDestinations occupies workspace's upper half.  Q5-Q7
             // destination rows extend past route 3 and would overwrite that
             // union-slot list before it is published to missDestinationsGm.
@@ -2677,6 +2884,8 @@ private:
             static_cast<uint32_t>(validatedRow), count, lengths, input,
             merged, unionSources, unionDestinations);
         if (captureOccurrences) {
+            PublishPrefetchOccurrences(queryStart, ROUTES, total, updated, occurrences, unionSources,
+                                       input.ReinterpretCast<int32_t>(), lengths);
             if (updated == count) {
                 PrepareTopkRowsVector(total, occurrences, unionDestinations, merged, input);
             } else {
@@ -2690,6 +2899,10 @@ private:
                             unionSources, unionDestinations, merged);
     }
 
+    GlobalTensor<int64_t> prefetchContextGm;
+    GlobalTensor<uint32_t> prefetchRoutesGm;
+    bool packedRoutesEnabled = false;
+    bool packedRoutesPublished = false;
     GlobalTensor<float> pair0Gm;
     GlobalTensor<float> pair1Gm;
     GlobalTensor<int32_t> candidateLengthsGm;

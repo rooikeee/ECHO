@@ -126,14 +126,20 @@ public:
         prefetchCapacity_ = capacity;
         prefetchOwnerStride_ = ownerStride;
     }
-    __aicore__ inline int64_t PrefetchRow(int32_t source, const RunInfo &info)
+    __aicore__ inline int64_t PrefetchRow(int32_t source, const RunInfo &info, uint32_t routeTag)
     {
         if (prefetchCapacity_ == 0 || source < 0 ||
-            static_cast<uint32_t>(source) >= prefetchSourceCapacity_) return -1;
+            (prefetchOwnerStride_ != 0U && static_cast<uint32_t>(source) >= prefetchSourceCapacity_)) return -1;
         if (prefetchBatch_ != static_cast<int32_t>(info.bIdx)) {
             prefetchBatch_ = static_cast<int32_t>(info.bIdx);
             prefetchBegin_ = info.bIdx == 0 ? 0 : prefetchEnds_.GetValue(info.bIdx - 1);
             prefetchEnd_ = prefetchEnds_.GetValue(info.bIdx);
+        }
+        if (prefetchOwnerStride_ == 0U) {
+            const uint32_t index = routeTag & 0x7fffffffU;
+            const int64_t row = static_cast<int64_t>(index) - 1;
+            return index != 0U && row >= static_cast<int64_t>(prefetchBegin_) * prefetchCapacity_ &&
+                row < static_cast<int64_t>(prefetchEnd_) * prefetchCapacity_ ? row : -1;
         }
         const int32_t tag = prefetchMap_.GetValue(
             static_cast<uint64_t>(prefetchBegin_) * prefetchSourceCapacity_ + source);
@@ -142,9 +148,12 @@ public:
             index < static_cast<int64_t>(prefetchEnd_) * prefetchCapacity_) return index;
         return -1;
     }
-    __aicore__ inline bool OwnsPersistentCopy(int64_t slot, const RunInfo &info)
+    __aicore__ inline bool OwnsPersistentCopy(int64_t slot, const RunInfo &info, uint32_t routeTag)
     {
         if (prefetchCapacity_ == 0) return true;
+        if (prefetchOwnerStride_ == 0U) {
+            return (routeTag & 0x80000000U) == 0U && info.gS1Idx % constInfo.gSize == 0;
+        }
         if (slot < 0 || static_cast<uint64_t>(slot) >= prefetchOwnerStride_) return false;
         const int32_t q = static_cast<int32_t>(info.topKBaseOffset / SFA_OFFLOAD_SPARSE_INDICES_CAPACITY);
         // Head groups may reuse a query's tokens. Only its first head group
@@ -155,11 +164,11 @@ public:
     __aicore__ inline void CopyInDramKv(
         int64_t &mte2Size, int64_t mte3Size, int64_t mergeMte3Idx,
         int64_t sourceTokenIdx,
-        const RunInfo &runInfo);
+        const RunInfo &runInfo, uint32_t routeTag = 0U);
     template <bool ALL_MISS = false>
     __aicore__ inline void CopyInSourceAwareKvPair(
         int64_t &mte2Size, int64_t mte3Size, int64_t mergeMte3Idx,
-        int32_t sourceToken0, int32_t sourceToken1,
+        int32_t sourceToken0, int32_t sourceToken1, uint32_t routeTag0, uint32_t routeTag1,
         int64_t destinationSlot0, int64_t destinationSlot1,
         int64_t &persistentOffset0,
         int64_t &persistentOffset1,
@@ -284,6 +293,8 @@ private:
         ROPE_MERGE_BUFFER_BYTES / sizeof(int32_t);
     static constexpr uint32_t DEST_METADATA_UB_OFFSET =
         SOURCE_METADATA_UB_OFFSET + SOURCE_METADATA_CAPACITY;
+    static constexpr uint32_t PREFETCH_METADATA_UB_OFFSET =
+        DEST_METADATA_UB_OFFSET + SOURCE_METADATA_CAPACITY;
     static constexpr uint32_t VALID_SIZE_FIRST_PART_UB_OFFSET = SFA_VALID_SIZE_VALUES_PER_AIV;
     static constexpr uint32_t VALID_SIZE_SECOND_PART_UB_OFFSET =
         VALID_SIZE_FIRST_PART_UB_OFFSET + SFA_VALID_SIZE_VALUES_PER_AIV;
@@ -291,7 +302,7 @@ private:
     static constexpr uint32_t VALID_SIZE_TMP_SUM_UB_OFFSET =
         VALID_SIZE_FIRST_PART_UB_OFFSET + VALID_SIZE_TOTAL_VALUES;
     static_assert(
-        (DEST_METADATA_UB_OFFSET + SOURCE_METADATA_CAPACITY) *
+        (PREFETCH_METADATA_UB_OFFSET + SOURCE_METADATA_CAPACITY) *
                 sizeof(int32_t) <=
             ConstInfo::BUFFER_SIZE_BYTE_8K * 2,
         "source-aware metadata must fit in inputBuff2.");
@@ -373,6 +384,7 @@ private:
     LocalTensor<KV_T> kvMergUb_;
     LocalTensor<KV_T> ropeMergUb_;
     LocalTensor<int32_t> v0ValidSizeUb_;
+    LocalTensor<uint32_t> prefetchRoutesUb_;
     LocalTensor<int32_t> sourceTokenIdsUb_;
     LocalTensor<int32_t> topkDestSlotsUb_;
 };
@@ -421,6 +433,7 @@ template <typename SFAT> __aicore__ inline void SFAVectorService<SFAT>::InitBuff
     topkDestSlotsUb_ =
         inputBuff2.Get<int32_t>()[DEST_METADATA_UB_OFFSET];
 
+    prefetchRoutesUb_ = inputBuff2.Get<uint32_t>()[PREFETCH_METADATA_UB_OFFSET];
     v0ValidSizeUb_ = v0ValidSizeBuff.Get<int32_t>();
 }
 
@@ -454,6 +467,10 @@ SFAVectorService<SFAT>::LoadSourceAwareMetadata(
         DataCopyPad(
             sourceTokenIdsUb_, sourceTokenIdsGm_[metadataGmOffset],
             copyParams, padParams);
+        if (prefetchCapacity_ != 0U && prefetchOwnerStride_ == 0U) {
+            DataCopyPad(prefetchRoutesUb_.ReinterpretCast<int32_t>(),
+                        prefetchMap_[metadataGmOffset], copyParams, padParams);
+        }
     }
     copyParams.blockLen = rangeSize * sizeof(int32_t);
     DataCopyPad(
@@ -1219,7 +1236,7 @@ template <typename SFAT>
 __aicore__ inline void SFAVectorService<SFAT>::CopyInDramKv(
     int64_t &mte2Size, int64_t mte3Size, int64_t mergeMte3Idx,
     int64_t sourceTokenIdx,
-    const RunInfo &runInfo)
+    const RunInfo &runInfo, uint32_t routeTag)
 {
     if (sourceTokenIdx < 0) {
         return;
@@ -1229,7 +1246,7 @@ __aicore__ inline void SFAVectorService<SFAT>::CopyInDramKv(
         "source-aware gather requires sparse_block_size=1.");
     // Read a completed staging row directly into the existing gather bank.
     // The ordinary miss writeback then commits that same UB data to its slot.
-    const int64_t stagingRow = PrefetchRow(static_cast<int32_t>(sourceTokenIdx), runInfo);
+    const int64_t stagingRow = PrefetchRow(static_cast<int32_t>(sourceTokenIdx), runInfo, routeTag);
     if (stagingRow >= 0) {
         const int64_t ubRow = mte2Size - mte3Size;
         DataCopyExtParams params{1, static_cast<uint32_t>(constInfo.headDim * sizeof(KV_T)), 0, 0, 0};
@@ -1277,7 +1294,7 @@ template <bool ALL_MISS>
 __aicore__ inline void
 SFAVectorService<SFAT>::CopyInSourceAwareKvPair(
     int64_t &mte2Size, int64_t mte3Size, int64_t mergeMte3Idx,
-    int32_t sourceToken0, int32_t sourceToken1,
+    int32_t sourceToken0, int32_t sourceToken1, uint32_t routeTag0, uint32_t routeTag1,
     int64_t destinationSlot0, int64_t destinationSlot1,
     int64_t &persistentOffset0,
     int64_t &persistentOffset1,
@@ -1305,6 +1322,47 @@ SFAVectorService<SFAT>::CopyInSourceAwareKvPair(
         (!source0FromDram || destinationSlot0 < 0 || keyOffset0 >= 0) &&
             (!source1FromDram || destinationSlot1 < 0 || keyOffset1 >= 0),
         "active miss destination exceeds the HBM block table.");
+    if constexpr (PAGE_ATTENTION) {
+        if (prefetchCapacity_ != 0U && prefetchOwnerStride_ == 0U &&
+            source0FromDram && source1FromDram && keyOffset0 >= 0 && keyOffset1 >= 0) {
+            const int64_t staging0 = PrefetchRow(sourceToken0, runInfo, routeTag0);
+            const int64_t staging1 = PrefetchRow(sourceToken1, runInfo, routeTag1);
+            const bool staged = staging0 >= 0;
+            if (staged == (staging1 >= 0)) {
+                const int64_t offset0 = staged ? staging0 : GetDramKeyGmOffset(sourceToken0, runInfo);
+                const int64_t offset1 = staged ? staging1 : GetDramKeyGmOffset(sourceToken1, runInfo);
+                const int64_t delta = offset0 > offset1 ? offset0 - offset1 : offset1 - offset0;
+                const int64_t kvStride = (delta - 1) * constInfo.headDim * sizeof(KV_T);
+                if (offset0 >= 0 && offset1 >= 0 && delta > 0 && kvStride < INT32_MAX) {
+                    // The two selected payloads are independent attention keys.
+                    // Gather in physical source order with one DMA per CKV/KPE;
+                    // carry each destination with its payload for exact writeback.
+                    const bool swapped = offset1 < offset0;
+                    const int64_t first = swapped ? offset1 : offset0;
+                    const int64_t owned0 = OwnsPersistentCopy(destinationSlot0, runInfo, routeTag0) ? keyOffset0 : -1;
+                    const int64_t owned1 = OwnsPersistentCopy(destinationSlot1, runInfo, routeTag1) ? keyOffset1 : -1;
+                    persistentOffset0 = swapped ? owned1 : owned0;
+                    persistentOffset1 = swapped ? owned0 : owned1;
+                    const int64_t ubRow = mte2Size - mte3Size;
+                    DataCopyExtParams params{2, static_cast<uint32_t>(constInfo.headDim * sizeof(KV_T)),
+                                             static_cast<uint32_t>(kvStride), 0, 0};
+                    DataCopyPadExtParams<KV_T> pad;
+                    auto kvUb = kvMergUb_[mergeMte3Idx % SFA_GATHER_UB_BANK_COUNT * SFA_GATHER_CKV_UB_BANK_ELEMENTS +
+                                          ubRow * constInfo.headDim];
+                    auto ropeUb = ropeMergUb_[mergeMte3Idx % SFA_GATHER_UB_BANK_COUNT * SFA_GATHER_KPE_UB_BANK_ELEMENTS +
+                                              ubRow * constInfo.headDimRope];
+                    if (staged) DataCopyPad(kvUb, prefetchKv_[first * constInfo.headDim], params, pad);
+                    else DataCopyPad(kvUb, dramKeyGm_[first * constInfo.headDim], params, pad);
+                    params.blockLen = constInfo.headDimRope * sizeof(KV_T);
+                    params.srcStride = (delta - 1) * constInfo.headDimRope * sizeof(KV_T);
+                    if (staged) DataCopyPad(ropeUb, prefetchRope_[first * constInfo.headDimRope], params, pad);
+                    else DataCopyPad(ropeUb, dramKeyRopeGm_[first * constInfo.headDimRope], params, pad);
+                    mte2Size += 2;
+                    return;
+                }
+            }
+        }
+    }
     int64_t keySrcStride = 0;
     int64_t keyRopeSrcStride = 0;
     if (keyOffset0 >= 0 && keyOffset1 >= 0) {
@@ -1342,12 +1400,12 @@ SFAVectorService<SFAT>::CopyInSourceAwareKvPair(
     const bool swapPair = canUseHbmPairOrder && keyOffset1 < keyOffset0;
 
     if (swapPair) {
-        persistentOffset0 = source1FromDram && OwnsPersistentCopy(destinationSlot1, runInfo) ? keyOffset1 : -1;
-        persistentOffset1 = source0FromDram && OwnsPersistentCopy(destinationSlot0, runInfo) ? keyOffset0 : -1;
+        persistentOffset0 = source1FromDram && OwnsPersistentCopy(destinationSlot1, runInfo, routeTag1) ? keyOffset1 : -1;
+        persistentOffset1 = source0FromDram && OwnsPersistentCopy(destinationSlot0, runInfo, routeTag0) ? keyOffset0 : -1;
         if (source1FromDram) {
             CopyInDramKv(
                 mte2Size, mte3Size, mergeMte3Idx,
-                sourceToken1, runInfo);
+                sourceToken1, runInfo, routeTag1);
         } else {
             CopyInSingleKv(
                 mte2Size, mte3Size, mergeMte3Idx,
@@ -1357,7 +1415,7 @@ SFAVectorService<SFAT>::CopyInSourceAwareKvPair(
         if (source0FromDram) {
             CopyInDramKv(
                 mte2Size, mte3Size, mergeMte3Idx,
-                sourceToken0, runInfo);
+                sourceToken0, runInfo, routeTag0);
         } else {
             CopyInSingleKv(
                 mte2Size, mte3Size, mergeMte3Idx,
@@ -1367,12 +1425,12 @@ SFAVectorService<SFAT>::CopyInSourceAwareKvPair(
         return;
     }
 
-    persistentOffset0 = source0FromDram && OwnsPersistentCopy(destinationSlot0, runInfo) ? keyOffset0 : -1;
-    persistentOffset1 = source1FromDram && OwnsPersistentCopy(destinationSlot1, runInfo) ? keyOffset1 : -1;
+    persistentOffset0 = source0FromDram && OwnsPersistentCopy(destinationSlot0, runInfo, routeTag0) ? keyOffset0 : -1;
+    persistentOffset1 = source1FromDram && OwnsPersistentCopy(destinationSlot1, runInfo, routeTag1) ? keyOffset1 : -1;
     if (source0FromDram) {
         CopyInDramKv(
             mte2Size, mte3Size, mergeMte3Idx,
-            sourceToken0, runInfo);
+            sourceToken0, runInfo, routeTag0);
     } else {
         CopyInSingleKv(
             mte2Size, mte3Size, mergeMte3Idx,
@@ -1382,7 +1440,7 @@ SFAVectorService<SFAT>::CopyInSourceAwareKvPair(
     if (source1FromDram) {
         CopyInDramKv(
             mte2Size, mte3Size, mergeMte3Idx,
-            sourceToken1, runInfo);
+            sourceToken1, runInfo, routeTag1);
     } else {
         CopyInSingleKv(
             mte2Size, mte3Size, mergeMte3Idx,
@@ -1876,6 +1934,10 @@ __aicore__ inline void SFAVectorService<SFAT>::MergeKvRange(
                         CopyInSourceAwareKvPair<ALL_MISS>(
                             mte2Size, mte3Size, mergeMte3Idx,
                             sourceToken0, sourceToken1,
+                            prefetchCapacity_ != 0U && prefetchOwnerStride_ == 0U && source0FromDram
+                                ? prefetchRoutesUb_.GetValue(rangeOffset) : 0U,
+                            prefetchCapacity_ != 0U && prefetchOwnerStride_ == 0U && source1FromDram
+                                ? prefetchRoutesUb_.GetValue(rangeOffset + 1) : 0U,
                             realS2Idx0, realS2Idx1,
                             persistentOffset0,
                             persistentOffset1,

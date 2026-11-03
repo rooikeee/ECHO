@@ -177,7 +177,7 @@ extern "C" __global__ __aicore__ void fused_scatter_copy_sparse_flash_attention(
             fusedTiling->missCap, hasAnyMiss);
         // All-hit takes the original gather path without owner-map work or a barrier.
         if (!hasAnyMiss) prefetchMap = nullptr;
-        if (!firstFill && prefetchMap != nullptr) {
+        if (!firstFill && prefetchMap != nullptr && fusedTiling->prefetchOwnerStride != 0U) {
             PrefetchCopy::PrepareOwners(sparseIndices, topkMissCounts, actualSeqLengthsQuery,
                 missCounts, prefetchOwners, fusedTiling->baseParams.batchSize,
                 fusedTiling->prefetchOwnerStride, &pipe);

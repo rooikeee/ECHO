@@ -10,6 +10,10 @@
 后续 [CopySFA内消费预取缓冲（v2）](docs/COPYSFA_PREFETCH_V2.md) 移除中间消费kernel，
 按LIM与CopySFA分别采集单算子profiling，不做整模型端到端测试。
 
+2026-11-03 的 [v3 预算与 CopySFA 优化](docs/COPYSFA_PREFETCH_V3.md) 将默认预算降为
+每 query 每 step 最多 8 个 token，MTP3 每请求最多 32 个；使用紧凑 TopK 标记，
+移除 CopySFA 的 owner 表及其全核同步。性能结果仍按两个单算子分别报告。
+
 仓库保留已有 Ascend 开发历史，包含以下源码目录：
 
 | 目录 | 上游 | 固定提交 |

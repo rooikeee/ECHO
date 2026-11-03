@@ -47,7 +47,8 @@ __aicore__ inline void PublishCutoffs(
 // No atomics and no additional KV copies. Lowest query wins duplicate sources.
 __aicore__ inline void PublishRequestMap(
     __gm__ uint8_t *contextAddr, __gm__ uint8_t *statesAddr,
-    __gm__ uint8_t *endsAddr, uint32_t batches, uint32_t sourceCapacity, TPipe *pipe)
+    __gm__ uint8_t *endsAddr, __gm__ uint8_t *routeMissCountsAddr,
+    uint32_t batches, uint32_t sourceCapacity, TPipe *pipe)
 {
     GlobalTensor<int64_t> context;
     GlobalTensor<int32_t> states, ends;
@@ -62,6 +63,18 @@ __aicore__ inline void PublishRequestMap(
         const int32_t begin = b == 0 ? 0 : ends.GetValue(b - 1U);
         const int32_t end = ends.GetValue(b);
         const uint32_t base = static_cast<uint32_t>(begin) * 14U;
+        constexpr uint64_t COMPACT_ROUTES_FLAG = 1ULL << 32U;
+        if ((static_cast<uint64_t>(context.GetValue(base + 12U)) & COMPACT_ROUTES_FLAG) != 0U &&
+            end - begin <= 7) {
+            GlobalTensor<int32_t> misses;
+            misses.SetGlobalBuffer((__gm__ int32_t *)routeMissCountsAddr);
+            uint32_t total = 0U;
+            for (int32_t q = begin; q < end; ++q)
+                total += static_cast<uint32_t>(misses.GetValue(q * LIMConfig::ROUTE_COUNT_WORKSPACE_STRIDE));
+            // The union's compact occurrence path joins candidate lists in UB;
+            // only its larger fallback still needs a source-addressed map.
+            if (total <= LIMConfig::TOPK * 2U) continue;
+        }
         const uint32_t capacity = static_cast<uint32_t>(context.GetValue(base + 12U));
         if (capacity == 0U || capacity > 2048U) continue;
         GlobalTensor<int32_t> counts, sources, map;
@@ -186,7 +199,11 @@ __aicore__ inline void Run(
         lengths.SetGlobalBuffer((__gm__ int32_t *)context.GetValue(base + 13));
         const uint32_t tableWidth = context.GetValue(base + 10);
         const uint32_t hostBlocks = context.GetValue(base + 11);
-        const uint32_t capacity = context.GetValue(base + 12);
+        const uint64_t packedCapacity = static_cast<uint64_t>(context.GetValue(base + 12));
+        const uint32_t capacity = static_cast<uint32_t>(packedCapacity);
+        constexpr uint32_t SCAN_TILES_SHIFT = 40U;
+        constexpr uint64_t SCAN_TILES_MASK = 0xffffU;
+        const uint64_t scanTiles = (packedCapacity >> SCAN_TILES_SHIFT) & SCAN_TILES_MASK;
         const int32_t requested = budgets.GetValue(q);
         const int32_t length = lengths.GetValue(b);
         const float threshold = thresholds.GetValue(q);
@@ -196,7 +213,13 @@ __aicore__ inline void Run(
         // owns skipped queries; only this query's [0, count) staging is published.
         const bool batchQuery = batchBuffers && capacity <= STAGING_ROWS;
         uint32_t count = 0;
-        for (uint32_t first = 0; first < static_cast<uint32_t>(length) && count < requested; first += tileSize) {
+        // Prediction is optional: cap the tiles inspected when too few misses
+        // pass the threshold (especially all-hit). Exact TopK/miss handling
+        // still covers the complete sequence. A zero field preserves legacy
+        // descriptors' unlimited scan behavior.
+        const uint64_t scanTokens = scanTiles == 0U ? static_cast<uint64_t>(length) : scanTiles * tileSize;
+        const uint32_t scanEnd = static_cast<uint32_t>(scanTokens < static_cast<uint64_t>(length) ? scanTokens : length);
+        for (uint32_t first = 0; first < scanEnd && count < requested; first += tileSize) {
             // Finish the previous tile's vector reads before reusing its DMA
             // input rows. The scalar fence also protects repeated ready polls
             // and score/meta reads from the scalar fallback on the next tile.

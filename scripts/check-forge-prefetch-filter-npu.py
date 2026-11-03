@@ -9,7 +9,7 @@ import sys
 import torch
 import torch_npu  # noqa: F401
 
-from echo_indexer_prefetch import EchoMTPIndexerPrefetch
+from echo_indexer_prefetch import COMPACT_ROUTES_FLAG, PREFETCH_SCAN_TILES_SHIFT, EchoMTPIndexerPrefetch
 
 
 def load_helpers():
@@ -59,14 +59,18 @@ def main():
 
         def call():
             cache.copy_(case.cache_seed)
-            prefetch.indexer(cache, outputs)
+            prefetch.indexer(cache, outputs, compact_routes=True)
 
         graph = helpers.capture(call)
         watched = (cache, *outputs, *prefetch.buffers, prefetch.context)
         addresses = [tensor.data_ptr() for tensor in watched]
         checks = 0
-        for length in (offload, offload - 1, offload - 63, offload - 65):
+        lengths = (offload, offload - 1, offload - 63, offload - 65)
+        scenarios = [(length, tiles) for tiles in (64, 1, 5) for length in lengths]
+        for length, scan_tiles in scenarios:
             case.offload_seq_lengths_key.fill_(length)
+            prefetch.compact_context[:, 12].fill_(
+                prefetch.capacity | COMPACT_ROUTES_FLAG | (scan_tiles << PREFETCH_SCAN_TILES_SHIFT))
             for budget, threshold, zero_query in (
                 (64, float("-inf"), False),
                 (7, float("-inf"), False),
@@ -94,7 +98,8 @@ def main():
                     counts = prefetch.counts.cpu().tolist()
                     sources = prefetch.sources.cpu()
                     for b, row in enumerate(case.req_entries):
-                        ids = torch.nonzero(seed[row, :length] < 0).flatten()[:budget]
+                        scan_end = min(length, scan_tiles * 512)
+                        ids = torch.nonzero(seed[row, :scan_end] < 0).flatten()[:budget]
                         if threshold != float("-inf"):
                             ids = ids[:0]
                         for route in range(queries):
@@ -125,6 +130,27 @@ def main():
                                     rtol=0,
                                     atol=0,
                                 )
+                    route_tags = prefetch.copy_routes.cpu().long() & 0xffffffff
+                    miss_sources = outputs[0].cpu().view(batch, queries, -1)
+                    miss_counts = outputs[2].cpu().view(batch, queries)
+                    flat_staging = sources.reshape(-1)
+                    for b in range(batch):
+                        available = set()
+                        for q in range(b * queries, (b + 1) * queries):
+                            available.update(sources[q, :counts[q]].tolist())
+                        owners = {}
+                        for route in range(queries):
+                            q = b * queries + route
+                            for position in range(int(miss_counts[b, route])):
+                                source = int(miss_sources[b, route, position])
+                                tag = int(route_tags[q, position])
+                                staging = tag & 0x7fffffff
+                                assert bool(staging) == (source in available)
+                                if staging:
+                                    assert b * queries * prefetch.capacity <= staging - 1 < (b + 1) * queries * prefetch.capacity
+                                    assert int(flat_staging[staging - 1]) == source
+                                owners[source] = owners.get(source, 0) + int((tag & 0x80000000) == 0)
+                        assert all(count == 1 for count in owners.values())
                     assert addresses == [tensor.data_ptr() for tensor in watched]
                     checks += 1
         print(
@@ -134,7 +160,7 @@ def main():
                     "graph_replays": checks,
                     "batch": batch,
                     "queries_per_request": queries,
-                    "checks": "ordered IDs, INT_MIN/-1, unaligned lengths, strict threshold, exact Host payload",
+                    "checks": "ordered IDs, INT_MIN/-1, unaligned lengths, strict threshold, exact Host payload, packed staging tags, one owner per miss",
                 }
             )
         )

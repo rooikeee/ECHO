@@ -260,7 +260,9 @@ ge::graphStatus TilingFusedScatterCopySparseFlashAttention(
                    return ge::GRAPH_FAILED);
         prefetchSourceCapacity = static_cast<uint32_t>(map.GetDim(1));
         prefetchCapacity = static_cast<uint32_t>(kv.GetDim(1));
-        prefetchOwnerStride = hbmMaxBlocks * BLOCK_SIZE;
+        // Width 2048 is the compact per-TopK descriptor ABI produced by LIM.
+        // A source-addressed map has a full context width (>2048 in offload).
+        prefetchOwnerStride = map.GetDim(1) == SPARSE_COUNT ? 0U : hbmMaxBlocks * BLOCK_SIZE;
     }
 
     // CheckFusedInputs owns this operator's variable-width MTP contract. The

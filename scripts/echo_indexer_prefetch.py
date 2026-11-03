@@ -86,6 +86,13 @@ def _finish_metadata(Sources, Slots, Misses, States, Counts,
         tl.store(OutCounts + b, new_misses, changed)
 
 
+DEFAULT_PREFETCH_BUDGET = 8
+COMPACT_ROUTES_FLAG = 1 << 32
+TOPK_CAPACITY = 2048
+DEFAULT_PREFETCH_SCAN_TILES = 64
+PREFETCH_SCAN_TILES_SHIFT = 40
+
+
 class EchoIndexerPrefetch:
     """Fixed-address bounded prefetch state; base consumer is single-query only.
 
@@ -95,7 +102,10 @@ class EchoIndexerPrefetch:
     thresholds/budgets in place between replays.
     """
 
-    def __init__(self, case, host_kv, host_rope, dram_table, capacity=64):
+    def __init__(self, case, host_kv, host_rope, dram_table, capacity=64,
+                 scan_tiles=DEFAULT_PREFETCH_SCAN_TILES):
+        if not 0 <= scan_tiles <= 65535:
+            raise ValueError("scan_tiles must be in [0,65535]; zero means unlimited.")
         self.host_owners = (host_kv, host_rope)
         host_kv, host_rope = host_kv.device_view, host_rope.device_view
         batch = case.index_block_table.shape[0]
@@ -113,6 +123,8 @@ class EchoIndexerPrefetch:
                 dram_table.dtype != torch.int32 or dram_table.device != device or
                 not dram_table.is_contiguous()):
             raise ValueError("DRAM block table must be contiguous NPU int32 [B, blocks].")
+        if total_queries * capacity >= (1 << 31) - 1:
+            raise ValueError("Staging rows exceed the packed int32 route encoding.")
         self.capacity = capacity
         self.case = case
         self.offload_lengths = case.offload_seq_lengths_key
@@ -120,12 +132,19 @@ class EchoIndexerPrefetch:
         self.host_rope = host_rope
         self.dram_table = dram_table
         self.thresholds = torch.full((total_queries,), float("inf"), dtype=torch.float32, device=device)
-        self.budgets = torch.full((total_queries,), capacity, dtype=torch.int32, device=device)
+        self.budgets = torch.full((total_queries,), min(capacity, DEFAULT_PREFETCH_BUDGET), dtype=torch.int32, device=device)
         self.counts = torch.zeros(total_queries, dtype=torch.int32, device=device)
         self.sources = torch.full((total_queries, capacity), -1, dtype=torch.int32, device=device)
         self.kv = torch.empty(total_queries, capacity, 512, dtype=dtype, device=device)
         self.rope = torch.empty(total_queries, capacity, 64, dtype=dtype, device=device)
-        self.ready = torch.zeros(total_queries, case.cache_seed.shape[1], dtype=torch.int32, device=device)
+        # Compact routes share one fixed allocation with ready. The descriptor's
+        # capacity high word selects this private extension; old descriptors
+        # keep their original 14-field ABI and source-addressed ready map.
+        source_capacity = case.cache_seed.shape[1]
+        self.ready_storage = torch.zeros(total_queries * (source_capacity + TOPK_CAPACITY),
+                                         dtype=torch.int32, device=device)
+        self.ready = self.ready_storage[:total_queries * source_capacity].view(total_queries, source_capacity)
+        self.copy_routes = self.ready_storage[total_queries * source_capacity:].view(total_queries, TOPK_CAPACITY)
         self.matches = torch.empty(total_queries, 1, 2048, dtype=torch.int32, device=device)
         self.remaining = torch.empty(total_queries, 2048, dtype=torch.int32, device=device)
         self.prefix = torch.empty_like(self.remaining)
@@ -135,10 +154,13 @@ class EchoIndexerPrefetch:
                   self.counts.data_ptr(), self.sources.data_ptr(), self.kv.data_ptr(),
                   self.ready.data_ptr(), host_kv.data_ptr(), host_rope.data_ptr(),
                   dram_table.data_ptr(), self.rope.data_ptr(), dram_table.shape[1],
-                  host_kv.shape[0], capacity, case.offload_seq_lengths_key.data_ptr()]
+                  host_kv.shape[0], capacity | (scan_tiles << PREFETCH_SCAN_TILES_SHIFT),
+                  case.offload_seq_lengths_key.data_ptr()]
         self.context = torch.tensor([fields] * total_queries, dtype=torch.int64, device=device)
+        fields[12] |= COMPACT_ROUTES_FLAG
+        self.compact_context = torch.tensor([fields] * total_queries, dtype=torch.int64, device=device)
         self.buffers = (self.thresholds, self.budgets, self.counts, self.sources,
-                        self.kv, self.rope, self.ready, dram_table,
+                        self.kv, self.rope, self.ready_storage, self.copy_routes, self.compact_context, dram_table,
                         case.offload_seq_lengths_key)
         self.outputs = None
 
@@ -148,7 +170,7 @@ class EchoIndexerPrefetch:
         self.counts.zero_()
         self.sources.fill_(-1)
 
-    def indexer(self, cache, outputs):
+    def indexer(self, cache, outputs, *, compact_routes=False):
         """Reset replay-local state and run exact Indexer with bounded prefetch."""
         if cache.shape != self.case.cache_seed.shape:
             raise ValueError("Cache shape must match the bound prefetch state.")
@@ -161,7 +183,8 @@ class EchoIndexerPrefetch:
             case.index_key_dequant_scale, case.index_key_cache, case.index_block_table,
             case.actual_seq_lengths_query, case.actual_seq_lengths_key,
             case.offload_seq_lengths_key, case.num_cache_tokens, case.request_state,
-            case.req_pool_entries, cache, *outputs, prefetch_context=self.context,
+            case.req_pool_entries, cache, *outputs,
+            prefetch_context=self.compact_context if compact_routes else self.context,
         )
 
     def allocate_outputs(self, outputs):
@@ -295,10 +318,11 @@ class EchoMTPIndexerPrefetch(EchoIndexerPrefetch):
     rows retain independent predictions; first-fill requests never speculate.
     """
 
-    def __init__(self, case, host_kv, host_rope, dram_table, capacity=64):
+    def __init__(self, case, host_kv, host_rope, dram_table, capacity=64,
+                 scan_tiles=DEFAULT_PREFETCH_SCAN_TILES):
         if any(q != 4 for q in case.q_values) or capacity != 64:
             raise ValueError("MTP3 target verification requires four rows and capacity=64.")
-        super().__init__(case, host_kv, host_rope, dram_table, capacity)
+        super().__init__(case, host_kv, host_rope, dram_table, capacity, scan_tiles)
         batch, device = len(case.q_values), case.query.device
         # Steady unions contain at most four TopK rows; first-fill may
         # populate the whole cache. Raw metadata keeps its 32768-column ABI.
@@ -313,15 +337,21 @@ class EchoMTPIndexerPrefetch(EchoIndexerPrefetch):
         self.buffers += (self.union_matches, self.union_remaining, self.union_prefix,
                          self.union_permutation, self.union_used)
 
-    def copy_sfa_inputs(self):
+    def indexer(self, cache, outputs, *, compact_routes=True):
+        """MTP defaults to batched per-TopK routes consumed by CopySFA."""
+        super().indexer(cache, outputs, compact_routes=compact_routes)
+
+    def copy_sfa_inputs(self, *, compact_routes=True):
         """Pass these explicit tensors to fused CopySFA after indexer().
 
-        The first query's ready row is the request-shared source->staging map:
-        0/1 do not identify a payload; 2+row selects flattened staging row.
-        LIM publishes it after all candidate copies finish. No consume() call
-        or reordered output allocation is needed on this path.
+        With compact_routes, [T,2048] tags encode staging row+1 (zero=Host)
+        and bit31 suppresses repeated persistent writes. The valid prefix is
+        defined by raw TopK miss counts. Pass the same flag to indexer().
+        The legacy mode supplies the first query's ready row as a shared
+        source map: 0/1 have no payload, 2+row selects a staging row.
         """
-        return {"prefetch_map": self.ready, "prefetch_kv": self.kv, "prefetch_rope": self.rope}
+        return {"prefetch_map": self.copy_routes if compact_routes else self.ready,
+                "prefetch_kv": self.kv, "prefetch_rope": self.rope}
 
     def allocate_outputs(self, outputs):
         """Allocate contiguous union scratch with the fixed outputs before capture."""

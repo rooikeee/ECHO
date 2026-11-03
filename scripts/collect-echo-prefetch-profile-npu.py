@@ -16,7 +16,8 @@ import sys
 import torch
 import torch_npu
 
-from echo_indexer_prefetch import EchoIndexerPrefetch, EchoMTPIndexerPrefetch
+from echo_indexer_prefetch import (DEFAULT_PREFETCH_BUDGET, DEFAULT_PREFETCH_SCAN_TILES,
+                                   EchoIndexerPrefetch, EchoMTPIndexerPrefetch)
 from echo_profile_workload import controlled_resident_sources
 
 
@@ -115,7 +116,7 @@ def run_batch(args, helper, upstream, batch):
     graph = None
     try:
         owner = EchoMTPIndexerPrefetch if args.mtp else EchoIndexerPrefetch
-        prefetch = owner(case, host_kv, host_rope, dram_table, args.capacity)
+        prefetch = owner(case, host_kv, host_rope, dram_table, args.capacity, args.prefetch_scan_tiles)
         consumed = prefetch.allocate_outputs(outputs)
         hbm_blocks = args.hot_tokens // 128 + 1
         hbm_table = torch.arange(batch * hbm_blocks, dtype=torch.int32, device="npu").view(batch, -1)
@@ -143,6 +144,7 @@ def run_batch(args, helper, upstream, batch):
         actual_kv = torch.full((batch,), args.hot_tokens + 128, dtype=torch.int32, device="npu")
 
         fused_consumer = args.prefetch_consumer == "copysfa"
+        compact_routes = fused_consumer and args.route_metadata == "compact"
 
         def update_prefetch_coverage():
             # Diagnostics only, after replay/timing. No CPU tensor reads enter
@@ -155,19 +157,35 @@ def run_batch(args, helper, upstream, batch):
             cpu_union_counts = outputs[5].cpu().tolist()
             cpu_prefetched = prefetch.sources.cpu()
             cpu_counts = prefetch.counts.cpu().tolist()
+            route_info = prefetch.copy_routes.cpu() if compact_routes else None
+            self_state = case.request_state.cpu().tolist()
             used, union_used = [], []
             for b in range(batch):
                 available = set()
                 for row in range(b * q, (b + 1) * q):
                     ids = cpu_prefetched[row, :cpu_counts[row]].long()
                     available.update(ids.tolist())
-                if available:
+                if available and not compact_routes:
                     logical = torch.tensor(sorted(available), dtype=torch.long)
                     tags = prefetch.ready[b * q, logical.to(case.query.device)].cpu().long() - 2
                     assert bool(((tags >= b * q * prefetch.capacity) &
                                  (tags < (b + 1) * q * prefetch.capacity)).all())
                     flat_sources = cpu_prefetched.reshape(-1)
                     torch.testing.assert_close(flat_sources[tags].long(), logical)
+                if compact_routes and int(self_state[b]) == -1:
+                    owners = {}
+                    for row in range(b * q, (b + 1) * q):
+                        for pos in range(cpu_misses[row]):
+                            source = int(cpu_sources[row, pos])
+                            tag = int(route_info[row, pos]) & 0xffffffff
+                            staging = tag & 0x7fffffff
+                            assert bool(staging) == (source in available), (row, pos, source, tag)
+                            if staging:
+                                index = staging - 1
+                                assert b * q * prefetch.capacity <= index < (b + 1) * q * prefetch.capacity
+                                assert int(cpu_prefetched.reshape(-1)[index]) == source
+                            owners[source] = owners.get(source, 0) + int((tag & 0x80000000) == 0)
+                    assert all(value == 1 for value in owners.values()), owners
                 union_used.append(sum(int(t) in available for t in cpu_union[b, :cpu_union_counts[b]].tolist()))
                 for row in range(b * q, (b + 1) * q):
                     used.append(sum(int(t) in available for t in cpu_sources[row, :cpu_misses[row]].tolist()))
@@ -182,7 +200,7 @@ def run_batch(args, helper, upstream, batch):
                 miss_sources, miss_slots, counts, hbm_table, dram_table,
                 rope, kv, host_rope.device_view, host_kv.device_view,
                 1 / math.sqrt(576), out,
-                **(prefetch.copy_sfa_inputs() if use_prefetch else {}),
+                **(prefetch.copy_sfa_inputs(compact_routes=compact_routes) if use_prefetch else {}),
             )
 
         def baseline():
@@ -190,7 +208,7 @@ def run_batch(args, helper, upstream, batch):
             sfa(outputs)
 
         def with_prefetch():
-            prefetch.indexer(cache, outputs)
+            prefetch.indexer(cache, outputs, compact_routes=compact_routes)
             if fused_consumer:
                 sfa(outputs, use_prefetch=True)
             else:
@@ -240,7 +258,7 @@ def run_batch(args, helper, upstream, batch):
         watched = (cache, kv, rope, out, *outputs, *consumed, *prefetch.buffers, prefetch.context)
         addresses = [tensor.data_ptr() for tensor in watched]
         for mode in modes:
-            prefetch.budgets.fill_(0 if mode == "context-budget-0" else args.capacity)
+            prefetch.budgets.fill_(0 if mode == "context-budget-0" else args.prefetch_budget)
             prefetch.thresholds.fill_(float("inf"))
             call = baseline if mode == "baseline" else with_prefetch
             # First call seeds the history. The next capture sees the same query.
@@ -284,6 +302,8 @@ def run_batch(args, helper, upstream, batch):
             row = {
                 "batch": batch, "mtp": args.mtp, "queries_per_request": q,
                 "total_queries": total_queries, "mode": mode,
+                "prefetch_budget_per_query": 0 if mode in ("baseline", "context-budget-0") else args.prefetch_budget,
+                "route_metadata": args.route_metadata if mode != "baseline" else None,
                 "original_misses_per_query": original_misses,
                 "original_union_misses_per_request": original_union_misses,
                 "prefetched_per_query": copied, "covered_misses_per_query": useful,
@@ -302,7 +322,7 @@ def run_batch(args, helper, upstream, batch):
                     if mode == "baseline":
                         upstream._call_op(case, cache, outputs)
                     else:
-                        prefetch.indexer(cache, outputs)
+                        prefetch.indexer(cache, outputs, compact_routes=compact_routes)
 
                 def reset_indexer():
                     cache.copy_(case.cache_seed)
@@ -342,7 +362,7 @@ def run_batch(args, helper, upstream, batch):
                 # Prove CopySFA uses the completed buffer, rather than silently
                 # falling back to Host. Poison only staged Host tokens after LIM.
                 reset()
-                prefetch.indexer(cache, outputs)
+                prefetch.indexer(cache, outputs, compact_routes=compact_routes)
                 torch.npu.synchronize()
                 saved_host = []
                 for b in range(batch):
@@ -424,7 +444,7 @@ def run_batch(args, helper, upstream, batch):
                 compare_dynamic("zero-budget")
                 case.offload_seq_lengths_key.fill_(offload)
                 case.actual_seq_lengths_key.fill_(args.context)
-                prefetch.budgets.fill_(args.capacity)
+                prefetch.budgets.fill_(args.prefetch_budget)
                 case.query.copy_(query_seed.view(batch, q, 64, 128)[:, :1].expand(-1, q, -1, -1).reshape_as(case.query))
                 case.index_weights.copy_(weight_seed.view(batch, q, 64)[:, :1].expand(-1, q, -1).reshape_as(case.index_weights))
                 compare_dynamic("duplicate-candidates-across-routes")
@@ -487,6 +507,10 @@ def main():
     parser.add_argument("--attention-reference", action="store_true",
                         help="check the initial attention output against CPU float attention")
     parser.add_argument("--capacity", type=int, choices=[64], default=64)
+    parser.add_argument("--prefetch-budget", type=int, choices=[8, 16, 32, 64], default=DEFAULT_PREFETCH_BUDGET)
+    parser.add_argument("--prefetch-scan-tiles", type=int, default=DEFAULT_PREFETCH_SCAN_TILES,
+                        help="maximum prediction tiles per query; 0 scans the full sequence")
+    parser.add_argument("--route-metadata", choices=["source-map", "compact"], default="compact")
     miss_group = parser.add_mutually_exclusive_group()
     miss_group.add_argument("--misses-per-query", type=int,
                         help="construct exact per-query misses using query-exclusive sources; not a real trace")
@@ -495,6 +519,8 @@ def main():
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--profile-repeats", type=int, default=10)
     args = parser.parse_args()
+    if not 0 <= args.prefetch_scan_tiles <= 65535:
+        parser.error("prefetch-scan-tiles must be in [0,65535]")
     if (args.context % 128 or args.hot_tokens % 256 or
             not 2048 <= args.hot_tokens <= 16128 or args.context - 128 <= args.hot_tokens):
         parser.error("need aligned context and hot tokens in [2048,16128], with context-128 > hot tokens")
@@ -517,6 +543,7 @@ def main():
                       native_root / "vllm_ascend/attention/sfa_kv_offload.py"]
     native_sources.extend([
         native_root / "csrc/attention/fused_lightning_indexer_manage/op_kernel/echo_indexer_prefetch.h",
+        native_root / "csrc/attention/fused_lightning_indexer_manage/op_kernel/lightning_indexer_service_vector.h",
         native_root / "csrc/attention/fused_lightning_indexer_manage/op_kernel/fused_lightning_indexer_manage.cpp",
         native_root / "csrc/attention/fused_scatter_copy_sparse_flash_attention/op_kernel/prefetch_copy_owners.h",
         native_root / "csrc/attention/fused_scatter_copy_sparse_flash_attention/op_kernel/fused_scatter_copy_sparse_flash_attention.cpp",
@@ -535,6 +562,8 @@ def main():
         "torch": torch.__version__, "torch_npu": torch_npu.__version__,
         "profile_scope": args.profile_scope,
         "prefetch_consumer": args.prefetch_consumer,
+        "prefetch_budget": args.prefetch_budget, "prefetch_scan_tiles": args.prefetch_scan_tiles,
+        "route_metadata": args.route_metadata,
         "capacity": args.capacity, "batches": args.batches,
         "mtp": args.mtp, "queries_per_request": 1 + args.mtp,
         "mtp_scope": "target verification only; excludes three draft forwards, acceptance/rejection and model layers",

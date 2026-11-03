@@ -62,6 +62,15 @@ public:
     __aicore__ inline void InitPrefetch(__gm__ uint8_t *context)
     {
         prefetchContext_ = context;
+        if (context != nullptr) {
+            GlobalTensor<int64_t> descriptor;
+            descriptor.SetGlobalBuffer((__gm__ int64_t *)context);
+            constexpr uint32_t SCAN_TILES_SHIFT = 40U;
+            constexpr uint64_t SCAN_TILES_MASK = 0xffffU;
+            const uint64_t tiles = (static_cast<uint64_t>(descriptor.GetValue(12U)) >>
+                                    SCAN_TILES_SHIFT) & SCAN_TILES_MASK;
+            prefetchScanTokens_ = tiles * static_cast<uint64_t>(s2BaseSize_);
+        }
     }
     __aicore__ inline void RunPrefetch(TPipe *pipe)
     {
@@ -114,6 +123,7 @@ protected:
 
 private:
     __gm__ uint8_t *prefetchContext_ = nullptr;
+    uint64_t prefetchScanTokens_ = 0U;
     // ================================Local Buffer区====================================
     // queue
     TQue<QuePosition::VECIN, 1> inQueue_;
@@ -727,7 +737,8 @@ __aicore__ inline void LIVector<LIT>::ProcessVec(const LICommon::RunInfo &info)
                     scoreScratchGm[static_cast<uint64_t>(routeIndex) * scoreStride_ +
                                    static_cast<uint32_t>(cuBaseS2Idx)],
                     reduceOutInner, cuS2LenVecAlign);
-                if (prefetchContext_ != nullptr) {
+                if (prefetchContext_ != nullptr && (prefetchScanTokens_ == 0U ||
+                    static_cast<uint64_t>(cuBaseS2Idx) < prefetchScanTokens_)) {
                     // Publish readiness after the raw score DMA, before any
                     // TopK scratch reuse. One query owner consumes these tiles.
                     SetWaitFlag<HardEvent::MTE3_S>(HardEvent::MTE3_S);

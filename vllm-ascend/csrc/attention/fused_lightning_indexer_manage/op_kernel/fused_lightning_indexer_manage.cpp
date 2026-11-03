@@ -284,7 +284,7 @@ __aicore__ inline bool FinalizeStandardCounts(
                     EchoPrefetch::PublishCutoffs(prefetchContext, thresholdScratch, requestState, topkSourceIds, actualSeqLengthsQuery, \
                                                   tiling_data->bSize, &tPipe);                                           \
                     tPipe.Reset();                                                                                      \
-                    EchoPrefetch::PublishRequestMap(prefetchContext, requestState, actualSeqLengthsQuery,                 \
+                    EchoPrefetch::PublishRequestMap(prefetchContext, requestState, actualSeqLengthsQuery, routeMissCounts,                 \
                         tiling_data->bSize, tiling_data->cacheSlotsSize, &tPipe);                                           \
                     tPipe.Reset();                                                                                      \
                 }                                                                                                       \
@@ -303,6 +303,7 @@ __aicore__ inline bool FinalizeStandardCounts(
                                  tiling_data->bSize, tiling_data->tSize, tiling_data->s2Size,                         \
                                  tiling_data->poolSize,                                                                \
                                  tiling_data->cacheSlotsSize, &tPipe);                                                   \
+                    unionOp.InitPrefetchRoutes(prefetchContext);                                       \
                     unionOp.Process(unionOwner, unionOwners);                                                          \
                 }                                                                                                       \
             }                                                                                                           \

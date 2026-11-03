@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile-root", type=Path, required=True)
+    parser.add_argument("--miss-directory", default="final_miss400")
+    parser.add_argument("--all-hit-directory", default="final_all_hit")
     args = parser.parse_args()
     profile_root = args.profile_root.resolve()
     source_files = (
@@ -43,8 +45,8 @@ def main():
     ).hexdigest()
     rows, validations = [], {}
     for directory, scenario in [
-        ("final_miss400", "miss400"),
-        ("final_all_hit", "all_hit"),
+        (args.miss_directory, "miss400"),
+        (args.all_hit_directory, "all_hit"),
     ]:
         data = json.loads((profile_root / directory / "result.json").read_text())
         assert data["status"] == "completed_single_operator_profiles"
@@ -59,6 +61,8 @@ def main():
                 "dynamic_graph_checks": metric.get("dynamic_graph_checks", []),
                 "staging_source_check": metric.get("staging_source_check"),
                 "actual_prefetched_tokens": sum(metric["prefetched_per_query"]),
+                "budget_per_query": data.get("prefetch_budget", 64),
+                "route_metadata": data.get("route_metadata", "source-map"),
             }
             for op, timing in metric["operators"].items():
                 target = profile_root / (
@@ -141,7 +145,7 @@ def main():
         "validation": validations,
         "source_sha256": sources,
         "binary_sha256": binaries,
-        "discarded_performance_run": "all_hit_140k: device6 concurrently occupied by another process",
+        "source_run_directories": [args.miss_directory, args.all_hit_directory],
         "removed_consumer_kernels": 20,
     }
     (profile_root / "summary.json").write_text(json.dumps(result, indent=2) + "\n")

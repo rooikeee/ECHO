@@ -16,6 +16,9 @@ cmake --build "$BUILD" --target op_host_aclnnInner -j4
 OPS_PROTO_SEPARATE=1 OPS_ACLNN_GEN=1 OPS_PROJECT_NAME=aclnnInner \
 OPS_PRODUCT_NAME='ascend910_93;' "$ASCEND_HOME_PATH/tools/opbuild/op_build" \
     "$BUILD/libop_host_aclnnInner.so" "$BUILD/autogen/inner"
+# The upstream JSON writer does not truncate an existing longer file. Remove
+# only generated metadata before regenerating after an input/schema change.
+rm -f "$BUILD/autogen/aic-ascend910_93-ops-info.json"
 cmake --build "$BUILD" --target generate_transformer_adapt_py generate_ops_info generate_compile_cmd -j4
 BACKUP=$(mktemp -d "$ROOT/build/copysfa-prefetch-v2/previous.XXXXXX")
 shopt -s nullglob
