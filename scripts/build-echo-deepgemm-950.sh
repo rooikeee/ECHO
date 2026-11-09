@@ -18,5 +18,6 @@ cd "$ECHO_DG_ROOT"
 import deep_gemm
 from deep_gemm.echo import EchoPrefetchBuffers
 assert hasattr(deep_gemm._C, "echo_paged_mqa_prefetch_out"), "Installed extension lacks ECHO entry"
+assert hasattr(deep_gemm._C, "echo_clear_prefetch_mappings"), "Rebuild: installed extension lacks tagged-map cleanup"
 print("Installed", deep_gemm.__file__)
 PY

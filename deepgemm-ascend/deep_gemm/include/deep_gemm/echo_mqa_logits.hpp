@@ -6,7 +6,7 @@
 namespace deep_gemm {
 // First supported contract: MXFP8, H=32, D=128, page=128, row-major page payload.
 // The upstream scheduler partitions KV splits across AIC/AIV blocks. Each row's
-// staging cursor is atomic; persistent resident mappings are read-only snapshots.
+// staging cursor and missing-to-staging map transitions are atomic.
 __global__ __mix__(1, 2) void echo_paged_mqa_logits_impl(
     uint32_t num_q_tokens, uint32_t table_stride, uint64_t kv_page_stride,
     gm_ptr<uint8_t, Major::K> q, __gm__ int16_t* sf_q,

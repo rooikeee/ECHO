@@ -66,7 +66,7 @@ def run(torch, dg, args, requests, source, source_dva, helpers):
     mapping = torch.full((source.shape[0],), -1, device="npu", dtype=torch.int32)
     written = torch.ones_like(mapping)
     buffers = EchoPrefetchBuffers.allocate(rows, length, args.capacity, source, source_dva=source_dva,
-        source_kind="MemFabric-DDR" if args.host_ddr else "HBM-diagnostic")
+        resident_capacity=args.resident_capacity, source_kind="MemFabric-DDR" if args.host_ddr else "HBM-diagnostic")
     operands = (q,sfq,fused,weights,lengths,page_table,indices,thresholds,stable,active,budgets,host_ids,mapping,written)
     launch = lambda: buffers.run(*operands)
     # Complete JIT and runtime setup outside capture; buffer addresses stay fixed.
@@ -80,9 +80,10 @@ def run(torch, dg, args, requests, source, source_dva, helpers):
     addresses = [t.data_ptr() for t in watched]
     source_cpu = source.cpu()
     scenarios = ("cold", "all-hit", "mixed", "shorter", "zero-budget", "empty-threshold",
-                 "invalid-host", "inactive", "all-inactive", "request-reset", "cold")
+                 "invalid-host", "inactive", "all-inactive", "request-reset", "shared-host", "cold")
     records = []
     for scenario in scenarios:
+        buffers.clear_prefetch_mappings()
         mapping.fill_(-1); written.fill_(1); thresholds.fill_(-float("inf")); stable.fill_(length - 4)
         budgets.fill_(args.capacity); active.fill_(rows)
         lengths.copy_(torch.tensor([length - 3 + i for i in range(4)] * requests, device="npu", dtype=torch.int32).view(-1, 1))
@@ -99,8 +100,10 @@ def run(torch, dg, args, requests, source, source_dva, helpers):
         elif scenario == "inactive": active.fill_(max(0, rows - 2))
         elif scenario == "all-inactive": active.zero_(); lengths.zero_()
         elif scenario == "request-reset":
-            # Mutate the immutable-for-one-launch mapping between launches.
-            host_ids.copy_(host_ids.flip(1)); mapping[1::3] = 5
+            # Cache manager changes occur only between completed launches.
+            host_ids.copy_(host_ids.flip(1)); mapping[1::3] = min(5,args.resident_capacity-1)
+        elif scenario == "shared-host":
+            host_ids.copy_((torch.arange(length,device="npu",dtype=torch.int32)[None] % 7 + 1).expand_as(host_ids))
         before = (mapping.cpu().clone(), written.cpu().clone())
         # Compare exact logits and the selected subset; saturated selection may
         # differ across schedules, but every staged byte/token must be valid.
@@ -115,26 +118,58 @@ def run(torch, dg, args, requests, source, source_dva, helpers):
             ids, mp, wr = host_ids.cpu(), mapping.cpu(), written.cpu()
             threshold_cpu, stable_cpu, budget_cpu = thresholds.cpu(), stable.cpu(), budgets.cpu()
             counts,tokens,hosts,staging = (t.cpu() for t in (buffers.counts,buffers.tokens,buffers.hosts,buffers.staging))
+            selected_hosts = set()
+            eligible_total = 0
             for row,n in enumerate(lens.tolist()):
                 eligible = []
                 if row < int(active.cpu()[0]):
                     for token in range(min(n,int(stable_cpu[row]))):
                         h = int(ids[row,token])
                         if (bool(actual[row,token] > threshold_cpu[row]) and 0 < h < source.shape[0]
-                                and int(wr[h]) != 0 and int(mp[h]) == -1):
+                                and int(wr[h]) != 0 and int(before[0][h]) == -1):
                             eligible.append(token)
-                expected_count = min(len(eligible),max(0,min(args.capacity,int(budget_cpu[row]))))
-                count = int(counts[row]); assert count == expected_count, (scenario,row,count,expected_count)
+                bound = min(len(eligible),max(0,min(args.capacity,int(budget_cpu[row]))))
+                eligible_total += bound
+                count = int(counts[row]); assert 0 <= count <= bound, (scenario,row,count,bound)
                 selected = tokens[row,:count].tolist()
                 assert len(set(selected)) == count and set(selected).issubset(eligible)
                 for i,token in enumerate(selected):
                     h = int(ids[row,token]); assert int(hosts[row,i]) == h
+                    assert h not in selected_hosts, ("duplicate host copy",scenario,h)
+                    selected_hosts.add(h)
+                    loc = int(mp[h]); assert loc == args.resident_capacity + row*args.capacity+i
                     torch.testing.assert_close(staging[row,i],source_cpu[h],rtol=0,atol=0)
                 assert bool((tokens[row,count:] == -1).all()) and bool((hosts[row,count:] == -1).all())
-            torch.testing.assert_close(mapping.cpu(),before[0],rtol=0,atol=0)
+            assert not bool((mp == -2).any()), "dangling host claim after kernel completion"
+            expected_map = before[0].clone()
+            for h in selected_hosts:
+                expected_map[h] = mp[h]
+            torch.testing.assert_close(mp,expected_map,rtol=0,atol=0)
+            if eligible_total: assert selected_hosts, "all eligible misses were lost"
+            if scenario == "shared-host" and length >= 11 and args.capacity >= 7:
+                assert len(selected_hosts) == 7
+            # A TopK query from any row can follow the global offset without
+            # scanning staging. Check the owner and byte address it resolves to.
+            for h in selected_hosts:
+                flat=int(mp[h])-args.resident_capacity
+                owner,slot=divmod(flat,args.capacity)
+                assert 0<=owner<rows and slot<int(counts[owner]) and int(hosts[owner,slot])==h
+                torch.testing.assert_close(staging[owner,slot],source_cpu[h],rtol=0,atol=0)
             torch.testing.assert_close(written.cpu(),before[1],rtol=0,atol=0)
             assert [t.data_ptr() for t in watched] == addresses
-        records.append({"scenario":scenario,"misses":int(buffers.counts.sum().cpu()),"replays":2})
+        records.append({"scenario":scenario,"unique_staged_hosts":int(buffers.counts.sum().cpu()),"replays":2})
+    # A disabled replay must clean previous tags without destroying a resident
+    # promotion installed by the consumer between replays.
+    previous_hosts=buffers.hosts.cpu().flatten()
+    valid_hosts=previous_hosts[previous_hosts>0]
+    promoted=int(valid_hosts[0]) if valid_hosts.numel() else None
+    if promoted is not None: mapping[promoted]=min(3,args.resident_capacity-1)
+    active.zero_();budgets.zero_();graph.replay();torch.npu.synchronize()
+    assert not bool((mapping>=args.resident_capacity).any()) and not bool((mapping==-2).any())
+    assert int(buffers.counts.sum().cpu())==0
+    if promoted is not None: assert int(mapping[promoted].cpu())==min(3,args.resident_capacity-1)
+    buffers.clear_prefetch_mappings();buffers.clear_prefetch_mappings();torch.npu.synchronize()
+    active.fill_(rows);budgets.fill_(args.capacity);mapping.fill_(-1)
     # Optional target-phase timing covers captured resets + metadata + fused MQA
     # and staging, and excludes downstream TopK/attention/speculative acceptance.
     timing = baseline_timing = None
@@ -156,11 +191,14 @@ def run(torch, dg, args, requests, source, source_dva, helpers):
             end.record();end.synchronize()
             return start.elapsed_time(end) * 1000 / args.repeats
         baseline_timing, timing = measure(baseline_graph), measure(graph)
+    buffers.clear_prefetch_mappings();torch.npu.synchronize()
+    assert not bool((mapping>=args.resident_capacity).any())
     return {"requests":requests,"queries_per_request":4,"mtp":3,"source":buffers.source_kind,
-            "seq_len":length,"token_bytes":args.token_bytes,"capacity":args.capacity,"checks":records,
+            "seq_len":length,"token_bytes":args.token_bytes,"capacity":args.capacity,
+            "resident_capacity":args.resident_capacity,"mapping":"resident slot or D+row*capacity+slot; -1=miss", "checks":records,
             "baseline_mqa_with_metadata_graph_us":baseline_timing,
             "target_mqa_prefetch_graph_us":timing,"complete_speculative_round_us":None,
-            "timing_scope":"prefetch includes resets, schedule and staging; baseline includes schedule and logits only"}
+            "timing_scope":"prefetch includes tagged-map cleanup, resets, schedule and staging; baseline includes schedule and logits only"}
 
 
 def main():
@@ -168,21 +206,23 @@ def main():
     parser.add_argument("--requests",type=int,nargs="+",default=[1,2])
     parser.add_argument("--seq-len",type=int,default=2048)
     parser.add_argument("--capacity",type=int,default=64)
+    parser.add_argument("--resident-capacity",type=int,default=4096,
+                        help="formal cache slot count D, used as the staging-tag offset")
     parser.add_argument("--token-bytes",type=int,default=1152)
     parser.add_argument("--host-ddr",action="store_true")
     parser.add_argument("--device",type=int,default=0)
     parser.add_argument("--repeats",type=int,default=0)
     parser.add_argument("--output",type=Path,default=Path("build/deepgemm-echo/950-validation.json"))
     args=parser.parse_args()
-    if min(args.requests)<=0 or args.seq_len<4 or not 0<args.capacity<=2048 or not 0<args.token_bytes<=65536 or args.repeats<0:
-        parser.error("positive requests, seq-len>=4, capacity<=2048, token-bytes<=65536 and repeats>=0 required")
+    if min(args.requests)<=0 or args.seq_len<4 or not 0<args.capacity<=2048 or not 0<args.token_bytes<=65536 or args.repeats<0 or args.resident_capacity<=0 or args.resident_capacity+max(args.requests)*4*args.capacity>2**31-1:
+        parser.error("positive requests, seq-len>=4, capacity<=2048, token-bytes<=65536, repeats>=0 and int32 mapping span required")
     import torch
     import torch_npu  # noqa: F401
     torch.npu.set_device(args.device)
     if "950" not in torch.npu.get_device_name():
         raise RuntimeError("This validation requires Ascend 950; this machine is not a target")
     import deep_gemm as dg
-    if not hasattr(dg._C,"echo_paged_mqa_prefetch_out"):
+    if not all(hasattr(dg._C,name) for name in ("echo_paged_mqa_prefetch_out","echo_clear_prefetch_mappings")):
         raise RuntimeError("Rebuild this repository's deepgemm-ascend package first")
     helpers=load_attention_helpers()
     source,dva=source_pool(torch,max(args.requests)*args.seq_len+1,args.token_bytes,args.host_ddr)

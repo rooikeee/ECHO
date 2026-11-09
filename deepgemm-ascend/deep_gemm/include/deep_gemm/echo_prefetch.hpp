@@ -4,8 +4,9 @@
 #include <deep_gemm/echo_prefetch_select.hpp>
 
 namespace deep_gemm {
-// ECHO staging, not cache insertion. No LRU, eviction, or mutable resident map
-// is touched. Slots reserved by different score blocks are disjoint.
+// ECHO staging, not cache insertion. Resident entries are preserved, while
+// missing entries acquire a transient staging address. No LRU/eviction is done.
+// Slots and host claims owned by different score blocks are disjoint.
 struct EchoPrefetch {
     EchoPrefetchArgs args;
     __ubuf__ int32_t* scratch = nullptr;

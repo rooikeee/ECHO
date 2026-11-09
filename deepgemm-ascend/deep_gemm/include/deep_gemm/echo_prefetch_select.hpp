@@ -14,6 +14,7 @@ __simt_callee__ __aicore__ inline void select(
 {
     const uint32_t lane = threadIdx.x, warp = lane / 32U, warp_lane = lane % 32U;
     auto* counters = reinterpret_cast<__gm__ int32_t*>(a.counts);
+    auto* mapping = reinterpret_cast<__gm__ int32_t*>(a.host_to_device);
     const int32_t active = *reinterpret_cast<__gm__ int32_t*>(a.active_rows);
     const int32_t stable = reinterpret_cast<__gm__ int32_t*>(a.stable_lens)[row];
     const int32_t requested = reinterpret_cast<__gm__ int32_t*>(a.budgets)[row];
@@ -41,8 +42,11 @@ __simt_callee__ __aicore__ inline void select(
         const int32_t h = reinterpret_cast<__gm__ int32_t*>(a.host_ids)[
             static_cast<uint64_t>(row) * a.context_capacity + token];
         if (!valid_host(h, a.host_tokens)) continue;
-        if (reinterpret_cast<__gm__ int32_t*>(a.written)[h] == 0 ||
-            reinterpret_cast<__gm__ int32_t*>(a.host_to_device)[h] != -1) continue;
+        if (reinterpret_cast<__gm__ int32_t*>(a.written)[h] == 0) continue;
+        // Claim before reserving slots. All concurrent map accesses are atomic:
+        // another tile/query seeing a claim or an encoded staging slot skips it.
+        // No spin waiting on another block, so an unscheduled owner cannot deadlock us.
+        if (asc_atomic_cas(mapping + h, kMiss, kClaimed) != kMiss) continue;
         host[i] = h; mask |= 1U << i; ++selected;
     }
     // Four warps compact one score tile; one bounded reservation per tile/row.
@@ -84,6 +88,13 @@ __simt_callee__ __aicore__ inline void select(
             const uint64_t output = static_cast<uint64_t>(row) * a.capacity + base + rank;
             reinterpret_cast<__gm__ int32_t*>(a.selected_tokens)[output] = static_cast<int32_t>(token);
             reinterpret_cast<__gm__ int32_t*>(a.selected_hosts)[output] = host[i];
+            // This encodes ownership/location, not DMA readiness. Consumers must
+            // wait for the entire fused launch before following this address.
+            asc_atomic_cas(mapping + host[i], kClaimed, staging_location(a.resident_capacity, output));
+        } else {
+            // A concurrent reservation exhausted the row budget. Return the
+            // unallocated claim to MISS; never publish a slot without a copy.
+            asc_atomic_cas(mapping + host[i], kClaimed, kMiss);
         }
         ++rank;
     }

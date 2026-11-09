@@ -15,6 +15,52 @@ static void require_tensor(const torch::Tensor& t, const torch::Tensor& q,
     DJ_HOST_ASSERT(!contiguous || t.is_contiguous());
 }
 
+static void check_mapping_span(int64_t resident_capacity, int64_t rows, int64_t capacity) {
+    DJ_HOST_ASSERT(resident_capacity > 0 && resident_capacity < INT32_MAX && rows > 0 && rows <= INT32_MAX &&
+                   capacity > 0 && capacity <= 2048 &&
+                   static_cast<uint64_t>(rows) * static_cast<uint64_t>(capacity) <= INT32_MAX - resident_capacity,
+                   "resident_capacity + rows * capacity must fit the nonnegative int32 mapping range");
+}
+
+static void launch_clear(EchoPrefetchArgs args, uint32_t cores) {
+    const std::string code=R"(
+#include <deep_gemm/echo_prefetch_clear_kernel.hpp>
+static void __instantiate() {
+    auto p = reinterpret_cast<void*>(&deep_gemm::echo_prefetch_clear_impl);
+}
+)";
+    if (runtime->get_dry_run()) { jit->compile_without_load("echo_prefetch_clear",code); return; }
+    const auto kernel=jit->compile("echo_prefetch_clear",code);
+    jit->launch(kernel,{.num_blocks=static_cast<int>(cores)},args,cores);
+}
+
+// Explicitly retire staging tags before dropping buffers or handing the map to
+// another owner. Promotions to resident slots survive the compare-and-swap.
+static void clear_prefetch_mappings(torch::Tensor& mapping, torch::Tensor& counts,
+                                    torch::Tensor& tokens, torch::Tensor& hosts, int64_t resident_capacity) {
+    DJ_HOST_ASSERT(mapping.device().type() == c10::DeviceType::PrivateUse1);
+    for (const auto& t : {mapping,counts,tokens,hosts}) require_tensor(t,mapping,at::kInt);
+    DJ_HOST_ASSERT(mapping.dim() == 1 && mapping.numel() > 1 && mapping.numel() <= INT32_MAX);
+    DJ_HOST_ASSERT(tokens.dim() == 2 && hosts.sizes() == tokens.sizes());
+    DJ_HOST_ASSERT(counts.dim() == 1 && counts.numel() == tokens.size(0));
+    check_mapping_span(resident_capacity,tokens.size(0),tokens.size(1));
+    const std::vector<torch::Tensor> outputs{mapping,counts,tokens,hosts};
+    for (size_t i=0;i<outputs.size();++i)
+        for (size_t j=0;j<i;++j) DJ_HOST_ASSERT(!outputs[i].is_alias_of(outputs[j]));
+    const c10::OptionalDeviceGuard guard(mapping.device());
+    DJ_HOST_ASSERT(jit->device.get_npu_arch() == 3510, "ECHO requires actual Ascend 950 hardware");
+    EchoPrefetchArgs args{};
+    args.host_to_device=reinterpret_cast<uintptr_t>(mapping.data_ptr());
+    args.counts=reinterpret_cast<uintptr_t>(counts.data_ptr());
+    args.selected_tokens=reinterpret_cast<uintptr_t>(tokens.data_ptr());
+    args.selected_hosts=reinterpret_cast<uintptr_t>(hosts.data_ptr());
+    args.rows=static_cast<uint32_t>(tokens.size(0));
+    args.capacity=static_cast<uint32_t>(tokens.size(1));
+    args.host_tokens=static_cast<uint32_t>(mapping.numel());
+    args.resident_capacity=static_cast<uint32_t>(resident_capacity);
+    launch_clear(args,runtime->get_num_sms());
+}
+
 // Caller-owned outputs and already packed scales: no tensor allocation or host
 // reads of device state. Warm up JIT before graph capture, retain all buffers.
 static void paged_mqa_prefetch_out(
@@ -23,9 +69,9 @@ static void paged_mqa_prefetch_out(
     const torch::Tensor& indices, const torch::Tensor& metadata,
     const torch::Tensor& thresholds, const torch::Tensor& stable, const torch::Tensor& active,
     const torch::Tensor& budgets, const torch::Tensor& host_ids,
-    const torch::Tensor& host_to_device, const torch::Tensor& written,
+    torch::Tensor& host_to_device, const torch::Tensor& written,
     torch::Tensor& logits, torch::Tensor& counts, torch::Tensor& tokens,
-    torch::Tensor& hosts, torch::Tensor& staging, uint64_t source_dva)
+    torch::Tensor& hosts, torch::Tensor& staging, uint64_t source_dva, int64_t resident_capacity)
 {
     DJ_HOST_ASSERT(q.device().type() == c10::DeviceType::PrivateUse1, "ECHO DeepGEMM requires Ascend NPU");
     DJ_HOST_ASSERT(q.dim() == 4 && q.size(0) > 0 && q.size(1) == 1 && q.size(2) == 32 && q.size(3) == 128);
@@ -67,6 +113,7 @@ static void paged_mqa_prefetch_out(
     require_tensor(tokens,q,at::kInt); require_tensor(hosts,q,at::kInt); require_tensor(staging,q,at::kByte);
     DJ_HOST_ASSERT(tokens.dim() == 2 && tokens.size(0) == rows && tokens.size(1) > 0 && tokens.size(1) <= 2048 &&
                    hosts.sizes() == tokens.sizes());
+    check_mapping_span(resident_capacity,rows,tokens.size(1));
     DJ_HOST_ASSERT(staging.dim() == 3 && staging.size(0) == rows && staging.size(1) == tokens.size(1) &&
                    staging.size(2) > 0 && staging.size(2) <= 65536);
     DJ_HOST_ASSERT(source_dva != 0 && source_dva <= INT64_MAX &&
@@ -78,15 +125,12 @@ static void paged_mqa_prefetch_out(
     require_tensor(metadata,q,at::kInt);
     DJ_HOST_ASSERT(metadata.dim() == 2 && metadata.size(0) == cores+1 && metadata.size(1) == 2);
     const std::vector<torch::Tensor> inputs{q,q_scales,kv,weights,context_lens,pages,indices,
-        thresholds,stable,active,budgets,host_ids,host_to_device,written};
-    const std::vector<torch::Tensor> outputs{metadata,logits,counts,tokens,hosts,staging};
+        thresholds,stable,active,budgets,host_ids,written};
+    const std::vector<torch::Tensor> outputs{metadata,logits,counts,tokens,hosts,staging,host_to_device};
     for (size_t i=0;i<outputs.size();++i) {
         for (const auto& input:inputs) DJ_HOST_ASSERT(!outputs[i].is_alias_of(input),"ECHO outputs cannot alias inputs");
         for (size_t j=0;j<i;++j) DJ_HOST_ASSERT(!outputs[i].is_alias_of(outputs[j]),"ECHO outputs cannot alias each other");
     }
-    // Rebuild the schedule on device every replay; never reuse a schedule from
-    // different lengths/request groups. These are ordinary same-stream launches.
-    launch_paged_mqa_logits_metadata(rows,16,512,2,cores,context_lens.data_ptr(),indices.data_ptr(),metadata.data_ptr());
     EchoPrefetchArgs args{
         reinterpret_cast<uintptr_t>(thresholds.data_ptr()),reinterpret_cast<uintptr_t>(stable.data_ptr()),
         reinterpret_cast<uintptr_t>(active.data_ptr()),reinterpret_cast<uintptr_t>(budgets.data_ptr()),
@@ -95,7 +139,12 @@ static void paged_mqa_prefetch_out(
         reinterpret_cast<uintptr_t>(tokens.data_ptr()),reinterpret_cast<uintptr_t>(hosts.data_ptr()),
         reinterpret_cast<uintptr_t>(staging.data_ptr()),source_dva,static_cast<uint32_t>(rows),
         static_cast<uint32_t>(context),static_cast<uint32_t>(host_to_device.numel()),
-        static_cast<uint32_t>(tokens.size(1)),static_cast<uint32_t>(staging.size(2))};
+        static_cast<uint32_t>(tokens.size(1)),static_cast<uint32_t>(staging.size(2)),
+        static_cast<uint32_t>(resident_capacity)};
+    // Retire old tags before clearing outputs; this runs on EVERY graph replay,
+    // even with zero active rows or budgets. Never discard old hosts in Python.
+    launch_clear(args,cores);
+    launch_paged_mqa_logits_metadata(rows,16,512,2,cores,context_lens.data_ptr(),indices.data_ptr(),metadata.data_ptr());
     const std::string code=R"(
 #include <deep_gemm/echo_mqa_logits.hpp>
 static void __instantiate() {
@@ -113,10 +162,12 @@ static void __instantiate() {
         context_lens.data_ptr(),pages.data_ptr(),indices.data_ptr(),metadata.data_ptr(),args);
 }
 static void register_apis(py::module_& m) {
+    m.def("echo_clear_prefetch_mappings",clear_prefetch_mappings,
+        py::arg("host_to_device"),py::arg("counts"),py::arg("tokens"),py::arg("hosts"),py::arg("resident_capacity"));
     m.def("echo_paged_mqa_prefetch_out",paged_mqa_prefetch_out,
         py::arg("q"),py::arg("q_scales"),py::arg("kv"),py::arg("weights"),py::arg("context_lens"),
         py::arg("pages"),py::arg("indices"),py::arg("metadata"),py::arg("thresholds"),py::arg("stable"),
         py::arg("active"),py::arg("budgets"),py::arg("host_ids"),py::arg("host_to_device"),py::arg("written"),
-        py::arg("logits"),py::arg("counts"),py::arg("tokens"),py::arg("hosts"),py::arg("staging"),py::arg("source_dva"));
+        py::arg("logits"),py::arg("counts"),py::arg("tokens"),py::arg("hosts"),py::arg("staging"),py::arg("source_dva"),py::arg("resident_capacity"));
 }
 } // namespace deep_gemm::echo_api

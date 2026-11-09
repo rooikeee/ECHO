@@ -1,5 +1,9 @@
 # ECHO DeepGEMM Ascend 实验实现
 
+偏移映射、跨 query 去重与每轮清理见 [位置映射说明](ECHO_PREFETCH_MAPPING.md)。
+
+完整编译、环境检查、JIT 和目标机验证步骤见 [950 编译文档](ECHO_DEEPGEMM_950_BUILD.md)。
+
 目标为 **Ascend 950 / CANN 9.20**。本次实现位于 `deepgemm-ascend/`，
 复用 ECHO 中导入的 DeepSeek MQA logits 核；未替换当前 SGLang 的生产 indexer。
 原 CUDA ECHO 参考提交为 `bc1b75c1000010d0ac6f032ebaac283255c050b1` 的
@@ -12,15 +16,15 @@
 DeepGEMM 原 paged MQA 打分（每个 KV split 512 tokens）
     → 分数在 UB 中完成归约，归还 AIC accumulation credit
     → 128-lane SIMT：score > threshold，检查 stable/active/host validity
-    → 直接查询只读 host_to_device，保留 missing=-1 的 token
-    → 每 tile/row 一次有上限的 CAS 预算预留
+    → CAS 占用 missing=-1 的 host token，跨块/跨 query 去重
+    → 每 tile/row 一次有上限的 CAS 预算预留，登记 D+row*capacity+slot
     → Host DDR DVA → UB 双缓冲 → query staging HBM
     → 继续后续 split；整个 launch 结束后才允许消费 staging
 ```
 
 这里没有再嵌入原生 QLI 的整行候选 hash、LRU 划分或淘汰 Plan。
 打分主体只增加一个默认空的 epilogue 接口；原 DeepGEMM 入口使用空实现。
-ECHO 入口为 `deep_gemm._C.echo_paged_mqa_prefetch_out`，Python 封装为
+ECHO 入口为 `deep_gemm._C.echo_paged_mqa_prefetch_out`，尾参包含正式缓存槽位数 `resident_capacity`；Python 封装为
 `deep_gemm.echo.EchoPrefetchBuffers`。封装预分配 logits、metadata、计数、token/host ID 和 staging。
 
 GPU ECHO 的专用 prefetch warp group 没有原样映射到 Ascend。本实现由当前 owner AIV
@@ -39,8 +43,10 @@ GPU ECHO 的专用 prefetch warp group 没有原样映射到 Ascend。本实现�
   QLI/indexer 页表必须合法。Python/host 校验 shape/layout，不把设备元数据拷到 CPU。
 - `host_ids[R,max_context]` 独立于 indexer 页表；它把逻辑 token 映射到被卸载 KV 记录。
   host ID=0 是 ECHO padding；负值和超出 host pool 的 ID 被忽略。
-- `host_to_device[host_tokens]` 为只读 int32 快照，**仅 -1 表示 miss**；0 是有效 cache slot。
-  `written[host_tokens]` 非零才允许读取源记录。请求切换/写入/淘汰由现有缓存管理更新这两者。
+- `host_to_device[host_tokens]` 为可写 int32 映射：-1 为 miss，`[0,D)` 为 resident，
+  `[D,D+rows*capacity)` 为本实例的 staging；`D=resident_capacity`。内部 -2 是短暂原子占用，
+  成功执行结束后不残留。`written[host_tokens]` 非零才允许读取源记录。
+  请求切换/写入/淘汰由缓存管理在完成边界之外更新，不能与本算子并发改表。
 - `thresholds[R]` 是 FP32 严格分数阈值，不是概率累计 top-p；NaN/+inf 不产生候选。
   `stable[R]`、`active[1]`、`budgets[R]` 均为 int32 device tensor。
 - staging 容量每行 1–2048 项；每个 KV record 为 1–65536 个连续 uint8 字节。
@@ -55,13 +61,15 @@ DeepGEMM scheduler 会把同 query 的不同 KV split 分配给不同计算块�
 每个 tile 内先用四个 warp compaction，再由一个 lane 预留整个批次；容量已满时整块跳过查询。
 
 预算饱和时不同块的先后顺序可能变化，选中的有效子集不保证每次完全一致。
-同一逻辑 query/token 只由 scheduler 处理一次，输出不能重复该逻辑 token。
-MTP 四行各有自己的预算与 staging，当前没有把四行做 host-ID 去重合并；
-不同逻辑 token 映射到同一 host ID 时也可能重复搬运，这是明确的带宽优化后续项。
+同一逻辑 query/token 只由 scheduler 处理一次。不同 query 或逻辑位置引用同一个 host ID 时，
+通过原子占用只搬一份，并把生产者 query 的全局 staging 偏移写入映射。
+各行预算与 staging 仍独立；消费者按偏移解码可以引用其他行已搬好的 KV。
+占用者预算不足时退回 miss，其他查询不自旋重试，因此不保证预算用满。
 
 **counts 是预留游标，不是 ready 标志。**消费者只能在同 stream 的整个算子完成后运行，
 或跨 stream 显式等完成事件。不能看到 count 增长就提前消费数据。
-本算子不修改 resident 映射，不会把未完成搬运的数据宣布为 cache hit；也不执行淘汰。
+本算子保留原 resident 条目，把成功预留的 miss 编码为 staging 位置；不执行淘汰。
+临时位置登记可能早于 DMA 完成，因此整个 launch 完成前不得按该位置消费。
 最终精确 TopK 与 attention/recall 仍走后续路径。预测漏掉的 token 必须精确回补；
 不能把 staging 当作完整 TopK KV。这是独立算子原型，目前未自动接入 SGLang 缓存消费者。
 
@@ -69,14 +77,16 @@ MTP 四行各有自己的预算与 staging，当前没有把四行做 host-ID �
 
 `EchoPrefetchBuffers.allocate` 在图外预分配。`run` 内只有固定的设备操作：
 
-1. 清 counts、tokens/hosts，logits 置 -inf；staging 尾部不清零，只有 counts 前缀有效。
+1. logits 置 -inf；cleanup kernel 依据旧 hosts 清理精确匹配的 staging tag，再重置 counts/tokens/hosts。
+   已转成正式 resident 的映射保留；staging 尾部不清零，只有 counts 前缀有效。
 2. 在 caller-owned metadata 上重算 paged schedule（每次重放都更新）。
-3. 发起一个融合 MQA+筛选+staging kernel。
+3. 发起一个融合 MQA+筛选+原子登记+staging kernel。
 
 因此整段图包含初始化和 metadata kernel，**不是整个工作负载只有一次 launch**。
 所有输入/输出/源池地址保持有效；length、active、threshold、budget、host mapping、written
-在重放之间原地更新。不能同时用同一份 outputs 在不同 stream 中重放。
-先在图外运行两次完成 JIT，然后捕获；shape/容量/源 DVA 变化需要重新创建并捕获。
+在重放之间原地更新。映射和 outputs 在本实例中绑定，不能在不同 stream 并发修改或重放。
+先在图外运行两次完成 JIT，然后捕获；shape/容量/源 DVA 变化需要先清理旧映射，再重新创建并捕获。
+最后消费者完成后调用 `buffers.clear_prefetch_mappings()`，待其完成才能丢弃 buffers。
 
 ## 950 构建和验收
 
@@ -98,7 +108,7 @@ python3 scripts/check-echo-deepgemm-950.py --requests 24 --seq-len 143360 --capa
 验证覆盖：MTP=3（4 query/request）、batch 1/2、capture、实际多次 replay、动态长度、
 预算/阈值、all-hit、mixed、invalid host、inactive、请求映射更新。
 它对照未带 ECHO epilogue 的 DeepGEMM，检查有效 logits 完全一致、选择子集合法、无逻辑重复、
-counts 上界、staging 每字节正确以及 resident/written 不被修改。
+counts 上界、跨行 host 去重、staging 每字节正确、偏移解码与旧 tag 清理；原 resident 和 written 保留。
 
 输出的 `target_mqa_prefetch_graph_us` 包含 reset + metadata + MQA + staging，
 `baseline_mqa_with_metadata_graph_us` 是 metadata + MQA，无搬运；
@@ -114,7 +124,8 @@ counts 上界、staging 每字节正确以及 resident/written 不被修改。
 ```
 
 测试直接执行生产 SIMT 选择和 staging 控制逻辑，在 128 个 CPU 线程中模拟 block barrier/shuffle，
-两个计算块竞争同一行预算。36 个并发/重放状态组合和 2 项 Python out-wrapper 测试通过，
+四个计算块竞争行预算和 host 占用，检查跨行去重、原子回退和清理/提升；
+66 个并发/状态场景和 4 项 Python wrapper 测试通过，
 并启用了 AddressSanitizer / UndefinedBehaviorSanitizer（包括退出时的 leak 检查）。
 CPU DMA mock 检查字节、UB 对齐和事件配对；不模拟真实 cache、MTE 时序或 AIC/AIV 并发。
 

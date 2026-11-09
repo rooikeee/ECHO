@@ -19,6 +19,15 @@ vLLM-Ascend 的 ECHO 有界预取、LIM/CopySFA 优化、构建和算子测试�
 [README.vllm-ascend.md](README.vllm-ascend.md)。该路径直接提交源码，保留固定上游版本和补丁用于追溯，
 预取默认关闭；已验证算子与 NPU Graph，尚无完整模型性能或精度验收。
 
+## ECHO DeepGEMM Ascend 950 实验算子
+
+`echo-deepgemm-950` 分支新增 paged MQA 打分、阈值筛选、miss 查询和 staging KV 搬运，
+并通过位置偏移实现跨 query 预取去重与每轮临时映射清理。
+编译和目标机验收请阅读 [950 算子编译文档](docs/ECHO_DEEPGEMM_950_BUILD.md)，
+接口与并发约定见 [实现说明](docs/ECHO_DEEPGEMM_ASCEND.md) 和
+[偏移映射协议](docs/ECHO_PREFETCH_MAPPING.md)。当前仅通过 CPU 检查，
+950 编译、Graph 重放和性能仍待验证；尚未接入 SGLang 的算子选择。
+
 ## 当前状态
 
 - 跨机器交接优先阅读：[当前实现](docs/ECHO_ASCEND_CURRENT_IMPLEMENTATION.md) 与
