@@ -9,6 +9,13 @@ using namespace __cce_simd;
 
 namespace deep_gemm {
 
+struct NoMQAEpilogue {
+    static constexpr uint32_t kUBBytes = 0;
+    __aicore__ void init(__ubuf__ uint8_t*) {}
+    __aicore__ void consume(uint32_t, uint32_t, uint32_t, __ubuf__ bfloat16_t*) {}
+    __aicore__ void finish() {}
+};
+
 // Pack adjacent scale pairs into the 16-token fragments consumed by L0B_MX.
 __simd_vf__ inline void vf_mqa_logits_pack_scales(__ubuf__ int16_t* scales, uint32_t num_elems) {
     vector_bool mask = asc_create_mask_b16(PAT_ALL);
@@ -233,7 +240,8 @@ template <
     uint32_t kNumLogitsStages,
     uint32_t kPageSize,
     bool kUseAscendKVLayout,
-    typename MakeScheduler
+    typename MakeScheduler,
+    typename TileEpilogue = NoMQAEpilogue
 >
 __aicore__ inline void mqa_logits_core_impl(
     gm_ptr<uint8_t, Major::K> q,
@@ -242,7 +250,8 @@ __aicore__ inline void mqa_logits_core_impl(
     __gm__ int16_t* sf_kv,
     gm_ptr<bfloat16_t, Major::K> weights,
     gm_ptr<bfloat16_t, Major::K> logits,
-    const MakeScheduler& make_scheduler
+    const MakeScheduler& make_scheduler,
+    TileEpilogue epilogue = {}
 ) {
     using Scheduler = decltype(make_scheduler(block_idx));
     constexpr bool kIsPaged = kPageSize != 0;
@@ -302,6 +311,10 @@ __aicore__ inline void mqa_logits_core_impl(
     static_assert(ub_seq_end.offset(1) <= UBSizeBytes, "UB overflow");
     static_assert(ub_sf_kv.offset(kNumSFUBStages) <= UBSizeBytes, "UB overflow");
     static_assert(!kIsPaged || kNumAccumStages + kNumKVStages <= 16, "Scale flag overflow");
+    // SIMT ECHO work needs DCache space; default kernels retain their old UB contract.
+    constexpr uint32_t kEpilogueOffset = aligned(ub_sf_kv.offset(kNumSFUBStages), 32U);
+    static_assert(!TileEpilogue::kUBBytes || kEpilogueOffset + TileEpilogue::kUBBytes <= 224U * 1024U,
+                  "MQA and tile epilogue exceed the SIMT-compatible UB budget");
 
     auto scheduler = make_scheduler(block_idx);
     const gm_ptr<int16_t, Major::MN> sf_q_t(scheduler.get_q_sf_stride(), reinterpret_cast<uintptr_t>(sf_q));
@@ -455,6 +468,7 @@ __aicore__ inline void mqa_logits_core_impl(
             q_stage_idx = (q_stage_idx + 1) % kNumQStages;
         }
     } else {
+        epilogue.init(reinterpret_cast<__ubuf__ uint8_t*>(kEpilogueOffset));
         const uint32_t sub_id = asc_get_sub_block_id();
         constexpr uint32_t kSFLoadEventIdx = kNumWeightStages;
         constexpr uint32_t kSFStoreEventIdx = kNumLogitsStages + 1;
@@ -640,6 +654,8 @@ __aicore__ inline void mqa_logits_core_impl(
                         mqa_logits_store<kNumLogitsStages>(logits.index(row, dst_col).ptr(),
                                                            line + store_begin - kv_idx, ub_logits_head.ptr(),
                                                            store_end - store_begin);
+                        epilogue.consume(row, store_begin, store_end - store_begin,
+                                         line + store_begin - kv_idx);
                     }
                     asc_sync_notify(PIPE_MTE3, PIPE_V, static_cast<event_t>(logits_stage_idx));
                     logits_stage_idx = (logits_stage_idx + 1) % kNumLogitsStages;
@@ -651,6 +667,7 @@ __aicore__ inline void mqa_logits_core_impl(
             asc_sync_notify(PIPE_V, PIPE_MTE2, static_cast<event_t>(weight_stage_idx));
             weight_stage_idx = (weight_stage_idx + 1) % kNumWeightStages;
         }
+        epilogue.finish();
     }
 }
 

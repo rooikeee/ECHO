@@ -8,6 +8,7 @@
 #include "apis/gemm.hpp"
 #include "apis/epilogue_class.hpp"
 #include "apis/attention.hpp"
+#include "apis/echo_prefetch.hpp"
 #include "apis/einsum.hpp"
 #include "apis/layout.hpp"
 #include "apis/aclnn.hpp"
@@ -34,6 +35,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     deep_gemm::epilogue_class::register_apis(m);
     deep_gemm::gemm_api::register_apis(m);
     deep_gemm::attention_api::register_apis(m);
+    deep_gemm::echo_api::register_apis(m);
     deep_gemm::einsum::register_apis(m);
     deep_gemm::layout::register_apis(m);
     deep_gemm::aclnn_api::register_apis(m);
